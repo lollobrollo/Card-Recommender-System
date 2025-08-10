@@ -218,11 +218,11 @@ def filter_data(raw_data, clean_data):
     filter_json_fields(raw_data, keep_fields, clean_data)
     filter_data_by_relevance(clean_data)
     
-    count = count_cards(clean_data)
-    message = f"Cards after filtering: {count}\n"
-    temp_fd, temp_path = tempfile.mkstemp(suffix=".txt", dir=os.path.dirname(clean_data))
-    with os.fdopen(temp_fd, 'w', encoding='utf-8') as tmp_file:
-        tmp_file.write(message)
+    # count = count_cards(clean_data)
+    # message = f"Cards after filtering: {count}\n"
+    # temp_fd, temp_path = tempfile.mkstemp(suffix=".txt", dir=os.path.dirname(clean_data))
+    # with os.fdopen(temp_fd, 'w', encoding='utf-8') as tmp_file:
+    #     tmp_file.write(message)
 
     keep_fields ={
     "oracle_id", "name", "set", "set_name", "oracle_text", "type_line",
@@ -321,11 +321,100 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
-def create_card_dict(img_path):
+def generate_and_save_dict():
     """
-    creates a card dictionary 
+    Using scryfall_data/clean_data.json, creates a dictionary of cards with
+     - key: the card oracle id
+     - value: the card name
+    Filters out cards without an associated image in scryfall_data/images
+    Saves the dictionary into scryfall_data/card_dict.pt
     """
+    data_dir = os.path.join(os.path.realpath(__file__), "scryfall_data")
+    json_path = os.path.join(data_dir, "clean_data.json")
+    image_dir = os.path.join(data_dir, "images")
+    output_path = os.path.join(data_dir, "card_dict.pt")
+    
+    # Get a set of all available image IDs
+    if not os.path.isdir(image_dir):
+        print(f"Error: Image directory not found at {image_dir}")
+        return
 
+    # Create a set of oracle_ids from the image filenames
+    try:
+        available_image_ids = {os.path.splitext(f)[0] for f in os.listdir(image_dir)}
+        print(f"Found {len(available_image_ids)} images in the '{os.path.basename(image_dir)}' directory.")
+    except Exception as e:
+        print(f"Error reading image directory {image_dir}: {e}")
+        return
+
+    # Iterate through the JSON and build the dictionary
+    card_dict = {}
+    print(f"Reading {os.path.basename(json_path)} to build dictionary...")
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            for card in tqdm(ijson.items(f, 'item'), desc="Processing cards"):
+                oracle_id = card.get('oracle_id')
+                # Only add the card if its oracle_id has a corresponding image
+                if oracle_id and oracle_id in available_image_ids:
+                    card_dict[oracle_id] = card.get('name')
+    except FileNotFoundError:
+        print(f"Error: Clean data file not found at {json_path}")
+        return
+
+    # Save the final dictionary
+    if not card_dict:
+        print("\nWarning: The final dictionary is empty. No matching images were found for cards in the JSON.")
+        return
+    print(f"\nGenerated dictionary with {len(card_dict)} cards.")
+    try:
+        torch.save(card_dict, output_path)
+        print(f"Successfully saved dictionary to: {output_path}")
+    except Exception as e:
+        print(f"\nError saving dictionary to {output_path}: {e}")
+
+
+def synchronize_images_and_data(json_path, image_dir):
+    """
+    Synchronizes the image directory with the clean data file by deleting
+    any images that do not have a corresponding entry in the clean JSON data.
+    (needed when filtering applied becomes more strict, to avoid downloading images from scratch)
+    Args:
+        json_path (str): The path to the final clean_data.json file
+        image_dir (str): The path to the directory containing downloaded images
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_oracle_ids = {card.get('oracle_id') for card in ijson.items(f, 'item') if card.get('oracle_id')}
+    except FileNotFoundError:
+        print(f"Error: JSON file not found at {json_path}. Aborting sync.")
+        return
+    print(f"Found {len(json_oracle_ids)} unique cards in the clean data file.")
+
+    if not os.path.isdir(image_dir):
+        print(f"Error: Image directory not found at {image_dir}. Nothing to sync.")
+        return
+        
+    image_files = {os.path.splitext(f)[0]: f for f in os.listdir(image_dir)}
+    image_oracle_ids = set(image_files.keys())
+    print(f"Found {len(image_oracle_ids)} images in the '{os.path.basename(image_dir)}' directory.")
+
+    ids_to_delete = image_oracle_ids - json_oracle_ids # Set difference operation
+    if not ids_to_delete:
+        print("\nImage directory is already in sync with the clean data. No files to delete.")
+        return
+
+    print(f"\nFound {len(ids_to_delete)} stale images to delete...")
+    deleted_count = 0
+    for oracle_id in tqdm(ids_to_delete, desc="Deleting stale images"):
+        filename_to_delete = image_files[oracle_id]
+        file_path_to_delete = os.path.join(image_dir, filename_to_delete)
+        try:
+            os.remove(file_path_to_delete)
+            deleted_count += 1
+        except OSError as e:
+            tqdm.write(f"Error deleting file {file_path_to_delete}: {e}")
+            
+    print(f"\nSync complete. Deleted {deleted_count} stale images.")
 
 
 if __name__ == "__main__":    
@@ -335,7 +424,13 @@ if __name__ == "__main__":
     clean_data = os.path.join(base_dir, "scryfall_data", "clean_data.json")
 
     # download_data(raw_data)
-    filter_data(raw_data, clean_data)
-    download_images(clean_data)
+    #filter_data(raw_data, clean_data)
+    # download_images(clean_data)
 
     # Found 33504 unique card images to download/process.
+    # after fixing the filter, cards after filtering: 29444
+
+    # Added Stricter filters, need to delete some images
+    # img_dir = os.path.join(os.path.dirname(__file__), "scryfall_data", "images")
+    # synchronize_images_and_data(clean_data, img_dir)
+    # Deleted 4060 stale images.
