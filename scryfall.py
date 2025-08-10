@@ -136,8 +136,7 @@ def filter_data_by_relevance(input_file, json_path='item'):
     is written to a temporary file before replacing the original.
     """
     def is_relevant(card):
-        legalities = card.get("legalities", {})
-        if "commander" not in legalities:
+        if "legal" != card.get("legalities", {}).get("commander", "NA"):
             return False
         if "Basic Land" in card.get("type_line", ""):
             return False
@@ -145,7 +144,11 @@ def filter_data_by_relevance(input_file, json_path='item'):
             return False
         if card.get("layout") in {"token", "double_faced_token"}:
             return False
-        if card.get("lang", "en") != "en":
+        if card.get("lang", "NA") != "en":
+            return False
+        if card.get("set_type") in {"art_series", "memorabilia", "token", "minigame"}:
+            return False
+        if card.get("oversized", False):
             return False
         return True
 
@@ -198,7 +201,6 @@ def filter_data_by_relevance(input_file, json_path='item'):
     shutil.move(temp_path, input_file)
 
 
-
 def filter_data(raw_data, clean_data):
     """
     Function that calls all filters in one place and saves the cleaned data in path 'clean_data'.
@@ -215,6 +217,12 @@ def filter_data(raw_data, clean_data):
     }
     filter_json_fields(raw_data, keep_fields, clean_data)
     filter_data_by_relevance(clean_data)
+    
+    count = count_cards(clean_data)
+    message = f"Cards after filtering: {count}\n"
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".txt", dir=os.path.dirname(clean_data))
+    with os.fdopen(temp_fd, 'w', encoding='utf-8') as tmp_file:
+        tmp_file.write(message)
 
     keep_fields ={
     "oracle_id", "name", "set", "set_name", "oracle_text", "type_line",
@@ -228,21 +236,22 @@ def filter_data(raw_data, clean_data):
 
 def count_cards(file_path):
     total = 0
-    monocolored = 0
-    multicolored = 0
+    # monocolored = 0
+    # multicolored = 0
     with open(file_path, 'r', encoding='utf-8') as f:
-        print('Reading data...')
+        # print('Reading data...')
         for card in ijson.items(f, 'item'):
             total += 1
-            colors = card.get("colors", [])
-            if isinstance(colors, list):
-                if len(colors) == 1:
-                    monocolored += 1
-                elif len(colors) > 1:
-                    multicolored += 1
-    print(f"Total cards: {total}")
-    print(f"Monocolored cards: {monocolored} ({monocolored / total:.2%})")
-    print(f"Multicolored cards: {multicolored} ({multicolored / total:.2%})\n")
+            # colors = card.get("colors", [])
+            # if isinstance(colors, list):
+            #     if len(colors) == 1:
+            #         monocolored += 1
+            #     elif len(colors) > 1:
+            #         multicolored += 1
+    # print(f"Total cards: {total}")
+    # print(f"Monocolored cards: {monocolored} ({monocolored / total:.2%})")
+    # print(f"Multicolored cards: {multicolored} ({multicolored / total:.2%})\n")
+    return total
 
 
 def download_images(data_path, output_folder=None):
@@ -258,7 +267,6 @@ def download_images(data_path, output_folder=None):
     if output_folder is None:
         output_folder = os.path.join(os.path.dirname(data_path), "images")
     os.makedirs(output_folder, exist_ok=True)
-
     print("Scanning clean JSON to collect image URLs...")
     # Stores tuples of (url, format_type) where format_type is 'large' or 'png'
     urls_to_process = {}
@@ -304,7 +312,6 @@ def download_images(data_path, output_folder=None):
                     resized_img = img.resize(target_size, Image.Resampling.LANCZOS)
                     rgb_img = resized_img.convert('RGB')
                     rgb_img.save(output_path, 'JPEG', quality=95)
-
         except (requests.exceptions.RequestException, IOError) as e:
             errors += 1
             tqdm.write(f"Error processing {url}: {e}")
@@ -314,15 +321,21 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
+def create_card_dict(img_path):
+    """
+    creates a card dictionary 
+    """
+
+
 
 if __name__ == "__main__":    
     # download = input("Download fresher data? (Y/N): ").strip().lower() == "y"
     base_dir = os.path.dirname(os.path.realpath(__file__))
     raw_data = os.path.join(base_dir, "scryfall_data", "raw_data.json")
     clean_data = os.path.join(base_dir, "scryfall_data", "clean_data.json")
-    
+
     # download_data(raw_data)
-    # filter_data(raw_data, clean_data)
+    filter_data(raw_data, clean_data)
     download_images(clean_data)
 
     # Found 33504 unique card images to download/process.
