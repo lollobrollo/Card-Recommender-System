@@ -1,0 +1,183 @@
+from models import *
+import torch
+import torch.nn as nn
+from torchvision import transforms
+import os
+import torch
+from PIL import Image
+import matplotlib.pyplot as plt
+
+
+
+def generate_and_save_dict():
+    """
+    Using data/clean_data.json, creates a dictionary of cards with
+     - key: the card oracle id
+     - value: the card name
+    Filters out cards without an associated image in data/images
+    Saves the dictionary into data/card_dict.pt
+    """
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    json_path = os.path.join(data_dir, "clean_data.json")
+    image_dir = os.path.join(data_dir, "images")
+    output_path = os.path.join(data_dir, "card_dict.pt")
+    
+    # Get a set of all available image IDs
+    if not os.path.isdir(image_dir):
+        print(f"Error: Image directory not found at {image_dir}")
+        return
+
+    # Create a set of oracle_ids from the image filenames
+    try:
+        available_image_ids = {os.path.splitext(f)[0] for f in os.listdir(image_dir)}
+        print(f"Found {len(available_image_ids)} images in the '{os.path.basename(image_dir)}' directory.")
+    except Exception as e:
+        print(f"Error reading image directory {image_dir}: {e}")
+        return
+
+    # Iterate through the JSON and build the dictionary
+    card_dict = {}
+    print(f"Reading {os.path.basename(json_path)} to build dictionary...")
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            for card in tqdm(ijson.items(f, 'item'), desc="Processing cards"):
+                oracle_id = card.get('oracle_id')
+                # Only add the card if its oracle_id has a corresponding image
+                if oracle_id and oracle_id in available_image_ids:
+                    card_dict[oracle_id] = card.get('name')
+    except FileNotFoundError:
+        print(f"Error: Clean data file not found at {json_path}")
+        return
+
+    # Save the final dictionary
+    if not card_dict:
+        print("\nWarning: The final dictionary is empty. No matching images were found for cards in the JSON.")
+        return
+    print(f"\nGenerated dictionary with {len(card_dict)} cards.")
+    try:
+        torch.save(card_dict, output_path)
+        print(f"Successfully saved dictionary to: {output_path}")
+    except Exception as e:
+        print(f"\nError saving dictionary to {output_path}: {e}")
+
+
+def synchronize_images_and_data(json_path, image_dir):
+    """
+    Synchronizes the image directory with the clean data file by deleting
+    any images that do not have a corresponding entry in the clean JSON data.
+    (needed when filtering applied becomes more strict, to avoid downloading images from scratch)
+    Args:
+        json_path (str): The path to the final clean_data.json file
+        image_dir (str): The path to the directory containing downloaded images
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_oracle_ids = {card.get('oracle_id') for card in ijson.items(f, 'item') if card.get('oracle_id')}
+    except FileNotFoundError:
+        print(f"Error: JSON file not found at {json_path}. Aborting sync.")
+        return
+    print(f"Found {len(json_oracle_ids)} unique cards in the clean data file.")
+
+    if not os.path.isdir(image_dir):
+        print(f"Error: Image directory not found at {image_dir}. Nothing to sync.")
+        return
+        
+    image_files = {os.path.splitext(f)[0]: f for f in os.listdir(image_dir)}
+    image_oracle_ids = set(image_files.keys())
+    print(f"Found {len(image_oracle_ids)} images in the '{os.path.basename(image_dir)}' directory.")
+
+    ids_to_delete = image_oracle_ids - json_oracle_ids # Set difference operation
+    if not ids_to_delete:
+        print("\nImage directory is already in sync with the clean data. No files to delete.")
+        return
+
+    print(f"\nFound {len(ids_to_delete)} stale images to delete...")
+    deleted_count = 0
+    for oracle_id in tqdm(ids_to_delete, desc="Deleting stale images"):
+        filename_to_delete = image_files[oracle_id]
+        file_path_to_delete = os.path.join(image_dir, filename_to_delete)
+        try:
+            os.remove(file_path_to_delete)
+            deleted_count += 1
+        except OSError as e:
+            tqdm.write(f"Error deleting file {file_path_to_delete}: {e}")
+    print(f"\nSync complete. Deleted {deleted_count} stale images.")
+
+
+def save_dataset_to_pt(img_dir, output_file):
+    """
+    Helper function that saves to file the dataset used to train the convolutional autoencoder.
+    Args:
+        img_dir (str): Path to folder containing images
+        output_file (str): Path to output .pt file
+    """
+    dataset = CardImageDataset(img_dir)
+    torch.save(dataset, output_file)
+
+
+def load_img_encoder(weights_path):
+    """
+    Loads the weithts of the trained autoencoder and returns an object containing the encoder for inference
+    Args:
+        weights_path (str): Path to the weights of the trained encoder
+    """
+    encoder = ConvAutoencoder()
+    encoder.load_state_dict(torch.load(weights_path))
+    encoder.eval()
+    return encoder
+
+
+def show_reconstructions(weights_path, img_dir, device='cuda' if torch.cuda.is_available() else 'cpu', num_images=5):
+    """
+    Shows original card images and reconstrucitons side by side for some cards
+    """
+    model = HybridConvAutoencoder()
+    model.load_state_dict(torch.load(weights_path, map_location=device))
+    model.to(device)
+    model.eval()
+
+    transform = transforms.Compose([
+        transforms.Resize((936, 672)),
+        transforms.ToTensor(),
+    ])
+
+    image_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir)]
+    image_files = image_files[:num_images]
+
+    original_images = []
+    reconstructed_images = []
+    with torch.no_grad():
+        for img_path in image_files:
+            img = Image.open(img_path).convert('RGB')
+            input_tensor = transform(img).unsqueeze(0).to(device)  # (1, 3, 936, 672)
+
+            output = model(input_tensor)
+
+            original_images.append(input_tensor.squeeze(0).cpu())
+            reconstructed_images.append(output.squeeze(0).cpu())
+
+    plt.figure(figsize=(12, 4 * num_images))
+    for i in range(num_images):
+        # Original image
+        plt.subplot(num_images, 2, 2*i + 1)
+        plt.title("Original")
+        plt.axis('off')
+        plt.imshow(original_images[i].permute(1, 2, 0))
+
+        # Reconstructed image
+        plt.subplot(num_images, 2, 2*i + 2)
+        plt.title("Reconstruction")
+        plt.axis('off')
+        plt.imshow(reconstructed_images[i].permute(1, 2, 0))
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+if __name__ == "__main__":
+    this = os.path.dirname(__file__)
+    img_dir = os.path.join(this, "data", "images")
+    dataset_path = os.path.join(this, "data", "img_dataset.pt")
+    save_dataset_to_pt(img_dir, dataset_path)
+    
