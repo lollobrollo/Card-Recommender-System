@@ -215,7 +215,7 @@ def filter_data(raw_data, clean_data):
     keep_fields = {
     "oracle_id", "oracle_text", "type_line", "name", "lang", "keywords", "mana_cost",
     "colors", "color_identity", "games", "layout", "card_faces", "set", "set_name",
-    "security_stamp", "legalities", "image_uris"
+    "security_stamp", "legalities", "image_uris", "power", "toughness", "rarity"
     }
     filter_json_fields(raw_data, keep_fields, clean_data)
     filter_data_by_relevance(clean_data)
@@ -228,7 +228,8 @@ def filter_data(raw_data, clean_data):
 
     keep_fields ={
     "oracle_id", "name", "set", "set_name", "oracle_text", "type_line",
-    "mana_cost", "colors", "color_identity", "keywords", "image_uris"
+    "mana_cost", "colors", "color_identity", "keywords", "image_uris",
+    "power", "toughness", "rarity"
     }
     filter_json_fields(clean_data, keep_fields, inplace = True)
 
@@ -325,14 +326,57 @@ def download_images(data_path, output_folder=None):
 
 def build_card_representations():
     """
-    Takes in card data and turns them into corresponding card representations
+    Takes in card data and turns them into corresponding card representations,
+    which are saved into a dictionary and later into a file for later use.
     """
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
-    cards = os.path.join(data_dir, "clean_data.json")
+    base_dir = os.path.dirname(__file__)
+    data_dir = os.path.join(base_dir, "data")
+    cards_path = os.path.join(data_dir, "clean_data.json")
     images_dir = os.path.join(data_dir, "images")
-    output_path = os.path.join(data_dir, "card_emb_dict.pt")
+    dict_path = os.path.join(data_dir, "card_dict.pt")
+    output_path = os.path.join(data_dir, "card_repr_dict.pt")
+    encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
+
+    card_dict = torch.load(dict_path, weights_only=False)
+    encoder = utils.load_img_encoder(encoder_path)
+
+    # Ordered lists used to create one-hot encodings of variables
+    all_types, all_keywords = utils.get_all_card_types_and_keywords(cards_path)
+    rarity_levels = ["common", "uncommon", "rare", "mythic"]
+
+    card_repr = {}
+    with open(cards_path, 'r', encoding='utf-8') as f:
+        for card in ijson.items(f, 'item'):
+            ### Construct image representation using trained autoencoder
+            img_path = os.path.join(images_dir, f"{card['oracle_id']}.jpg")
+            with Image.open(img_path) as img:
+                img = img.resize((672, 936), Image.Resampling.LANCZOS)
+            img_encoded = encoder.encode(img)
+            assert len(img_encoded) == 1024, f"Embedding dimension error: got {len(img_encoded)} instead of 1024"
+
+            ### Construct Numeric encoding of categorical and numerical variables
+            # typeline: one hot encoding for each type that appears in the dataset
+            types_present = utils.extract_card_types(card)
+            types_encoded = [int(t in types_present) for t in all_types]
+            # keywords: one-hot encoded
+            keywords_present = utils.extract_card_keywords(card)
+            keywords_encoded = [int(k in keywords_present) for k in all_keywords]
+            # power and toughness: numerical encoding
+            stats = [utils.safe_int(card.get("power")), utils.safe_int(card.get("toughness"))]
+            # rarity: one-hot encoding
+            rarity_encoded = [int(card.get("rarity") == r) for r in rarity_levels]
+
+            ### Construct text embedding with natural language processing
+
+            
+            card_vector = torch.tensor(
+                list(img_encoding) + card_types + stats + keywords_encoded + rarity_encoded + text_encoded,
+                dtype=torch.float32
+            )
+            card_repr[card["oracle_id"]] = card_vector
+
     try:
-        torch.save(emb_dict, output_path)
+        torch.save(repr_dict, output_path)
         print(f"Successfully saved dictionary to: {output_path}")
     except Exception as e:
         print(f"\nError saving dictionary to {output_path}: {e}")    
@@ -346,7 +390,7 @@ if __name__ == "__main__":
     clean_data = os.path.join(base_dir, "data", "clean_data.json")
 
     # download_data(raw_data)
-    #filter_data(raw_data, clean_data)
+    # filter_data(raw_data, clean_data)
     # download_images(clean_data)
 
     # Found 33504 unique card images to download/process.
@@ -359,3 +403,4 @@ if __name__ == "__main__":
 
     # utils.generate_and_save_dict()
 
+    # print(count_cards(clean_data))

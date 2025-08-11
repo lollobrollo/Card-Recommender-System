@@ -6,8 +6,8 @@ import os
 import torch
 from PIL import Image
 import matplotlib.pyplot as plt
-
-
+from tqdm import tqdm
+import ijson
 
 def generate_and_save_dict():
     """
@@ -173,6 +173,77 @@ def show_reconstructions(weights_path, img_dir, device='cuda' if torch.cuda.is_a
     plt.tight_layout()
     plt.show()
 
+
+def get_all_card_types_and_keywords(json_path):
+    """
+    Scans the dataset and extracts all unique types, supertypes, and subtypes from the 'type_line' of each card.
+    Also extracts all keywords present in cards.
+    Args:
+        json_path (str): The path to the clean_data.json file.
+    Returns two Python ordered lists containing:
+        all unique type strings found in the dataset
+        all unique keywords found in the dataset
+    """
+    print(f"Extracting all unique types from: {os.path.basename(json_path)}")
+    all_types = set()
+    all_keywords = set()
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            for card in tqdm(ijson.items(f, 'item'), desc="Scanning card types"):
+                    all_types.update(extract_card_types(card))
+                    all_keywords.update(extract_card_keywords(card))
+
+    except FileNotFoundError:
+        print(f"Error: Data file not found at {json_path}")
+        return set()
+    print(f"\nExtraction complete.\nFound {len(all_types)} unique types, supertypes, and subtypes.\nFound {len(all_keywords)} unique keywords.")
+
+    return sorted(list(all_types)), sorted(list(all_keywords)) 
+
+
+def extract_card_keywords(card):
+    """
+    Helper function that extract and returns all keywords of the card passed as argument
+    """
+    card_keywords = card.get("keywords")
+    if not keywords:
+        return set()
+    return set(card_keywords)
+
+
+def extract_card_types(card):
+    """
+    Helper function that extract and returns all types of the card passed as argument
+    """
+    card_types_set = set()
+    type_line = card.get("type_line")
+    if not type_line:
+        return set()
+    if "—" in type_line:
+        parts = type_line.split('—')
+        main_types_part = parts[0]
+        sub_types_part = parts[1]
+    else:
+        main_types_part = type_line
+        sub_types_part = "" # Card has no subtypes (e.g., "Instant")
+
+    main_types = main_types_part.strip().split()
+    card_types_set.update(main_types)
+
+    if sub_types_part:
+        sub_types = sub_types_part.strip().split()
+        card_types_set.update(sub_types)
+
+    return card_types_set
+
+
+def safe_int(val):
+    if val == '*':
+        return 0
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return -1
 
 
 if __name__ == "__main__":
