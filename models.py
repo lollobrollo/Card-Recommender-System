@@ -7,9 +7,6 @@ from torchvision import transforms
 from PIL import Image
 import os
 
-# Model used to learn embeddings of card images, part of card representation
-import torch
-from torch import nn
 
 class HybridConvAutoencoder(nn.Module):
     def __init__(self, latent_dim=1024):
