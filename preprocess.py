@@ -16,6 +16,8 @@ from PIL import Image
 import itertools
 import torch
 import utils
+from sentence_transformers import SentenceTransformer
+from torchvision import transforms
 
 def download_data(output_path):
     """
@@ -324,7 +326,7 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
-def build_card_representations():
+def build_card_representations(batch_size=8):
     """
     Takes in card data and turns them into corresponding card representations,
     which are saved into a dictionary and later into a file for later use.
@@ -336,44 +338,86 @@ def build_card_representations():
     dict_path = os.path.join(data_dir, "card_dict.pt")
     output_path = os.path.join(data_dir, "card_repr_dict.pt")
     encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     card_dict = torch.load(dict_path, weights_only=False)
-    encoder = utils.load_img_encoder(encoder_path)
+    encoder = utils.load_img_encoder(encoder_path, device)
+    text_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
     # Ordered lists used to create one-hot encodings of variables
     all_types, all_keywords = utils.get_all_card_types_and_keywords(cards_path)
     rarity_levels = ["common", "uncommon", "rare", "mythic"]
+    color_id_levels = ["W", "U", "B", "R", "G", "C"]
 
     card_repr = {}
-    with open(cards_path, 'r', encoding='utf-8') as f:
-        for card in ijson.items(f, 'item'):
-            ### Construct image representation using trained autoencoder
+
+    def safe_int(val): # Used to savely interpret power and toughness
+        if val == '*':
+            return 0
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return -1
+
+    def process_batch(cards_batch):
+        # Load and preprocess images as tensor batch
+        imgs = []
+        for card in cards_batch:
             img_path = os.path.join(images_dir, f"{card['oracle_id']}.jpg")
             with Image.open(img_path) as img:
-                img = img.resize((672, 936), Image.Resampling.LANCZOS)
-            img_encoded = encoder.encode(img)
-            assert len(img_encoded) == 1024, f"Embedding dimension error: got {len(img_encoded)} instead of 1024"
+                img_tensor = transforms.Compose([transforms.Resize((936, 672)), transforms.ToTensor()])(img)
+                imgs.append(img_tensor)
+        imgs = torch.stack(imgs).to(device)
+        # Encode images batch
+        with torch.no_grad():
+            img_encoded_batch = encoder.encode(imgs) # shape: (batch_size, 1024)
 
-            ### Construct Numeric encoding of categorical and numerical variables
-            # typeline: one hot encoding for each type that appears in the dataset
+        # Encode texts batch
+        oracle_texts = [card.get("oracle_text", "") for card in cards_batch]
+        text_emb_batch = text_model.encode(oracle_texts, batch_size=batch_size, convert_to_tensor=True)
+
+        # Build vector representations
+        for i, card in enumerate(cards_batch):
             types_present = utils.extract_card_types(card)
-            types_encoded = [int(t in types_present) for t in all_types]
-            # keywords: one-hot encoded
+            card_types = [int(t in types_present) for t in all_types]
+
             keywords_present = utils.extract_card_keywords(card)
             keywords_encoded = [int(k in keywords_present) for k in all_keywords]
-            # power and toughness: numerical encoding
-            stats = [utils.safe_int(card.get("power")), utils.safe_int(card.get("toughness"))]
-            # rarity: one-hot encoding
+
+            stats = [safe_int(card.get("power")), safe_int(card.get("toughness"))]
+
             rarity_encoded = [int(card.get("rarity") == r) for r in rarity_levels]
 
-            ### Construct text embedding with natural language processing
-
+            card_color_id = card.get("color_identity", [])
+            if not card_color_id:
+                card_color_id = ["C"]
+            color_id_encoded = [int(c in card_color_id) for c in color_id_levels]
             
-            card_vector = torch.tensor(
-                list(img_encoding) + card_types + stats + keywords_encoded + rarity_encoded + text_encoded,
-                dtype=torch.float32
-            )
-            card_repr[card["oracle_id"]] = card_vector
+            # Concatenate all features as one tensor
+            card_vector = torch.cat([
+                torch.tensor(card_types, dtype=torch.float32),
+                torch.tensor(stats, dtype=torch.float32),
+                torch.tensor(rarity_encoded, dtype=torch.float32),
+                torch.tensor(keywords_encoded, dtype=torch.float32),
+                torch.tensor(color_id_encoded, dtype=torch.float32),
+                text_emb_batch[i].to("cpu"),       # already tensor
+                img_encoded_batch[i].to("cpu"),    # already tensor
+            ])
+
+            card_repr[card["oracle_id"]] = card_vector.cpu()
+
+    # Main loop: batch cards before processing
+    batch = []
+    with open(cards_path, 'r', encoding='utf-8') as f:
+        for card in tqdm(ijson.items(f, 'item'), total=29444, desc="Creating representations"):
+            batch.append(card)
+            if len(batch) == batch_size:
+                process_batch(batch)
+                batch = []
+
+    # Process remaining cards in batch if any
+    if batch:
+        process_batch(batch)
 
     try:
         torch.save(repr_dict, output_path)
@@ -404,3 +448,5 @@ if __name__ == "__main__":
     # utils.generate_and_save_dict()
 
     # print(count_cards(clean_data))
+
+    build_card_representations(batch_size=32)

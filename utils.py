@@ -8,6 +8,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import ijson
+import re
+
 
 def generate_and_save_dict():
     """
@@ -115,14 +117,18 @@ def save_dataset_to_pt(img_dir, output_file):
     torch.save(dataset, output_file)
 
 
-def load_img_encoder(weights_path):
+def load_img_encoder(checkpoint_path, device = 'cuda' if torch.cuda.is_available() else 'cpu'):
     """
     Loads the weithts of the trained autoencoder and returns an object containing the encoder for inference
     Args:
-        weights_path (str): Path to the weights of the trained encoder
+        checkpoint_path (str): Path to the checkpoint containing weights of the trained encoder
+        device (str): Device to use the model on
     """
-    encoder = ConvAutoencoder()
-    encoder.load_state_dict(torch.load(weights_path))
+    encoder = HybridConvAutoencoder()
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model_state_dict = checkpoint['model_state_dict']
+    encoder.load_state_dict(model_state_dict)
+    encoder.to(device)
     encoder.eval()
     return encoder
 
@@ -131,17 +137,9 @@ def show_reconstructions(checkpoint_path, img_dir, device='cuda' if torch.cuda.i
     """
     Shows original card images and reconstrucitons side by side for some cards
     """
-    try:
-        model = HybridConvAutoencoder()
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model_state_dict = checkpoint['model_state_dict']
-        model.load_state_dict(model_state_dict)
-    except Exception as e:
-        print(f"Error loading checkpoint: {e}")
-        return
-    model.to(device)
-    model.eval()
-
+    
+    model = load_img_encoder(checkpoint_path, device=device)
+    
     transform = transforms.Compose([
         transforms.Resize((936, 672)),
         transforms.ToTensor(),
@@ -190,12 +188,12 @@ def get_all_card_types_and_keywords(json_path):
         all unique type strings found in the dataset
         all unique keywords found in the dataset
     """
-    print(f"Extracting all unique types from: {os.path.basename(json_path)}")
+    print(f"Extracting all unique types an keywords from: {os.path.basename(json_path)}")
     all_types = set()
     all_keywords = set()
     try:
         with open(json_path, 'r', encoding='utf-8') as f:
-            for card in tqdm(ijson.items(f, 'item'), desc="Scanning card types"):
+            for card in ijson.items(f, 'item'):
                     all_types.update(extract_card_types(card))
                     all_keywords.update(extract_card_keywords(card))
 
@@ -212,7 +210,7 @@ def extract_card_keywords(card):
     Helper function that extract and returns all keywords of the card passed as argument
     """
     card_keywords = card.get("keywords")
-    if not keywords:
+    if not card_keywords:
         return set()
     return set(card_keywords)
 
@@ -243,13 +241,77 @@ def extract_card_types(card):
     return card_types_set
 
 
-def safe_int(val):
-    if val == '*':
-        return 0
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return -1
+def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_name=True):
+    """
+    Preprocess Oracle text for sentence encoding
+    Args:
+        text (str): The raw oracle text from Scryfall
+        remove_reminder (bool): If True, strips reminder text in parentheses (keywords encoded separately, could be redundant)
+        mana_as_words (bool): If True, replaces mana symbols like {G} with words ("green mana")
+        mask_name (bool): If True, replace most istances of card self reference with a generic placeholder
+    Returns:
+        str: The cleaned Oracle text.
+    """
+    if not text:
+        return ""
+
+    # 1. Normalize newlines to separate abilities with a period + space
+    text = text.strip()
+    text = re.sub(r"\s*\n\s*", ". ", text)
+
+    # 2. Remove reminder text (text inside parentheses)
+    if remove_reminder:
+        text = re.sub(r"\([^)]*\)", "", text)
+
+    # 3. Replace mana symbols with words
+    if mana_as_words:
+        mana_map = {
+            "{W}": "white mana",
+            "{U}": "blue mana",
+            "{B}": "black mana",
+            "{R}": "red mana",
+            "{G}": "green mana",
+            "{C}": "colorless mana",
+            "{T}": "tap",
+            "{Q}": "untap"
+        }
+        # Add generic mana costs like {2}, {3}, etc.
+        mana_map.update({f"{{{i}}}": f"{i} generic mana" for i in range(0, 21)})
+        for symbol, replacement in mana_map.items():
+            text = text.replace(symbol, replacement)
+
+    import re
+
+    # 4. Replace card self references with placeholder
+    if mask_name:
+        # Escape card name for regex, match whole word case-insensitive
+        card_name_pattern = re.escape(card_name)
+        # \b for word boundaries so partial matches don't occur
+        card_name_regex = re.compile(rf'\b{card_name_pattern}\b', flags=re.IGNORECASE)
+        # Phrases that commonly refer to the card itself
+        self_ref_phrases = [
+            r'this card',
+            r'this creature',
+            r'this artifact',
+            r'this enchantment',
+            r'this planeswalker',
+            r'this land',
+            r'this permanent',
+        ]
+        # Compile regex for self reference phrases (word boundaries + case insensitive)
+        self_ref_regex = re.compile(r'\b(' + '|'.join(self_ref_phrases) + r')\b', flags=re.IGNORECASE)
+        
+        text = card_name_regex.sub('[CARD]', text)
+        text = self_ref_regex.sub('[CARD]', text)
+
+    # 5. Normalize spaces
+    text = re.sub(r"\s+", " ", text)
+
+    # 6. Trim leftover punctuation spacing
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = text.strip()
+
+    return text
 
 
 if __name__ == "__main__":

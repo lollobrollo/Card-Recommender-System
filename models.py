@@ -12,7 +12,7 @@ class HybridConvAutoencoder(nn.Module):
     def __init__(self, latent_dim=1024):
         super().__init__()        
         self.encoder_conv = nn.Sequential(
-            # Input: (3, 936, 672), not considering batch size
+            # Input: (N, 3, 936, 672), not considering batch size
             nn.Conv2d(3, 16, kernel_size=3, padding=1), nn.ReLU(True), nn.MaxPool2d(2, 2),  # -> (16, 468, 336)
             nn.Conv2d(16, 32, kernel_size=3, padding=1), nn.ReLU(True), nn.MaxPool2d(2, 2),  # -> (32, 234, 168)
             nn.Conv2d(32, 64, kernel_size=3, padding=1), nn.ReLU(True), nn.MaxPool2d(2, 2),  # -> (64, 117, 84)

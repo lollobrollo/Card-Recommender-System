@@ -16,7 +16,7 @@ def train_and_save_convAE(dataset_path, output_path, num_epochs=10, lr=1e-3, dev
         output_path (str): Path where trained model will be saved
         num_epochs (int): Number of training epochs
         lr (float): Learning rate
-        device (torch.device): Device to train on
+        device (str): Device to train on
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
