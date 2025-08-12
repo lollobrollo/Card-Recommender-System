@@ -127,12 +127,18 @@ def load_img_encoder(weights_path):
     return encoder
 
 
-def show_reconstructions(weights_path, img_dir, device='cuda' if torch.cuda.is_available() else 'cpu', num_images=5):
+def show_reconstructions(checkpoint_path, img_dir, device='cuda' if torch.cuda.is_available() else 'cpu', num_images=5):
     """
     Shows original card images and reconstrucitons side by side for some cards
     """
-    model = HybridConvAutoencoder()
-    model.load_state_dict(torch.load(weights_path, map_location=device))
+    try:
+        model = HybridConvAutoencoder()
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model_state_dict = checkpoint['model_state_dict']
+        model.load_state_dict(model_state_dict)
+    except Exception as e:
+        print(f"Error loading checkpoint: {e}")
+        return
     model.to(device)
     model.eval()
 
@@ -250,5 +256,6 @@ if __name__ == "__main__":
     this = os.path.dirname(__file__)
     img_dir = os.path.join(this, "data", "images")
     dataset_path = os.path.join(this, "data", "img_dataset.pt")
-    save_dataset_to_pt(img_dir, dataset_path)
-    
+    checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+    # save_dataset_to_pt(img_dir, dataset_path)
+    show_reconstructions(checkpoint_path, img_dir)

@@ -64,18 +64,18 @@ def train_and_save_convAE(dataset_path, output_path, num_epochs=10, lr=1e-3, dev
         epoch_loss = running_loss / len(dataloader.dataset)
         print(f"Epoch [{epoch+1}/{num_epochs}] Loss: {epoch_loss:.6f}")
     
-    print("Saving checkpoint...")
-    try:
-        checkpoint = {
-            'epoch': epoch + 1, # Save the *next* epoch number to start from
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': epoch_loss,
-        }
-        torch.save(checkpoint, output_path)
-        print(f"Checkpoint saved successfully to '{output_path}'")
-    except Exception as e:
-        print(f"Error saving checkpoint: {e}")
+        print("Saving checkpoint...")
+        try:
+            checkpoint = {
+                'epoch': epoch + 1, # Save the *next* epoch number to start from
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': epoch_loss,
+            }
+            torch.save(checkpoint, output_path)
+            print(f"Checkpoint saved successfully to '{output_path}'")
+        except Exception as e:
+            print(f"Error saving checkpoint: {e}")
 
 
 if __name__ == "__main__":
