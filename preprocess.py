@@ -326,17 +326,20 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
-def build_card_representations(batch_size=8):
+def build_card_representations(batch_size=8, use_img=True):
     """
     Takes in card data and turns them into corresponding card representations,
     which are saved into a dictionary and later into a file for later use.
+    Args:
+        batch_size (int): Size of card batches processed by models
+        use_img (bool): If True, add to the representation the card image embedding
     """
     base_dir = os.path.dirname(__file__)
     data_dir = os.path.join(base_dir, "data")
     cards_path = os.path.join(data_dir, "clean_data.json")
     images_dir = os.path.join(data_dir, "images")
     dict_path = os.path.join(data_dir, "card_dict.pt")
-    output_path = os.path.join(data_dir, "card_repr_dict.pt")
+    output_path = os.path.join(data_dir, "card_repr_dict_v1.pt") # v1-> only hand coded features; v2 -> features AND image
     encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -351,7 +354,7 @@ def build_card_representations(batch_size=8):
 
     card_repr = {}
 
-    def safe_int(val): # Used to savely interpret power and toughness
+    def safe_int(val): # Used to safely interpret power and toughness
         if val == '*':
             return 0
         try:
@@ -359,18 +362,33 @@ def build_card_representations(batch_size=8):
         except (TypeError, ValueError):
             return -1
 
+    def extract_cmc(str): # Converts a curly-brace mana cost string into its total integer cost
+        if not mana_cost:
+        return -1
+        symbols = re.findall(r"\{([^}]+)\}", mana_cost)
+        if not symbols:
+            return 0
+        total = 0
+        for symbol in symbols:
+            if symbol.isdigit():  # Generic mana like {4}
+                total += int(symbol)
+            else:  # Any colored/special mana counts as 1
+                total += 1
+        return total
+
     def process_batch(cards_batch):
         # Load and preprocess images as tensor batch
         imgs = []
-        for card in cards_batch:
-            img_path = os.path.join(images_dir, f"{card['oracle_id']}.jpg")
-            with Image.open(img_path) as img:
-                img_tensor = transforms.Compose([transforms.Resize((936, 672)), transforms.ToTensor()])(img)
-                imgs.append(img_tensor)
-        imgs = torch.stack(imgs).to(device)
-        # Encode images batch
-        with torch.no_grad():
-            img_encoded_batch = encoder.encode(imgs) # shape: (batch_size, 1024)
+        if use_img:
+            for card in cards_batch:
+                img_path = os.path.join(images_dir, f"{card['oracle_id']}.jpg")
+                with Image.open(img_path) as img:
+                    img_tensor = transforms.Compose([transforms.Resize((936, 672)), transforms.ToTensor()])(img)
+                    imgs.append(img_tensor)
+            imgs = torch.stack(imgs).to(device)
+            # Encode images batch
+            with torch.no_grad():
+                img_encoded_batch = encoder.encode(imgs) # shape: (batch_size, 1024)
 
         # Encode texts batch
         oracle_texts = [card.get("oracle_text", "") for card in cards_batch]
@@ -393,17 +411,21 @@ def build_card_representations(batch_size=8):
                 card_color_id = ["C"]
             color_id_encoded = [int(c in card_color_id) for c in color_id_levels]
             
-            # Concatenate all features as one tensor
-            card_vector = torch.cat([
-                torch.tensor(card_types, dtype=torch.float32),
-                torch.tensor(stats, dtype=torch.float32),
-                torch.tensor(rarity_encoded, dtype=torch.float32),
-                torch.tensor(keywords_encoded, dtype=torch.float32),
-                torch.tensor(color_id_encoded, dtype=torch.float32),
-                text_emb_batch[i].to("cpu"),       # already tensor
-                img_encoded_batch[i].to("cpu"),    # already tensor
-            ])
+            cmc = extract_cmc(card.get("mana_cost"))
 
+            # Concatenate all features as one tensor
+            parts = [
+                torch.as_tensor(card_types, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(stats, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(rarity_encoded, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(color_id_encoded, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(cmc, dtype=torch.float32, device="cpu"),
+                text_emb_batch[i].to("cpu")
+            ]
+            if use_img:
+                parts.append(img_encoded_batch[i].to("cpu"))
+            card_vector = torch.cat(parts)
             card_repr[card["oracle_id"]] = card_vector.cpu()
 
     # Main loop: batch cards before processing
@@ -420,7 +442,7 @@ def build_card_representations(batch_size=8):
         process_batch(batch)
 
     try:
-        torch.save(repr_dict, output_path)
+        torch.save(output_path, output_path)
         print(f"Successfully saved dictionary to: {output_path}")
     except Exception as e:
         print(f"\nError saving dictionary to {output_path}: {e}")    
@@ -449,4 +471,4 @@ if __name__ == "__main__":
 
     # print(count_cards(clean_data))
 
-    build_card_representations(batch_size=32)
+    build_card_representations(batch_size=16, use_img=False)
