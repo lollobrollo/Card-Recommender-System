@@ -326,7 +326,7 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
-def build_card_representations(batch_size=8, use_img=True):
+def build_card_representations(batch_size=8, use_img=False):
     """
     Takes in card data and turns them into corresponding card representations,
     which are saved into a dictionary and later into a file for later use.
@@ -339,7 +339,12 @@ def build_card_representations(batch_size=8, use_img=True):
     cards_path = os.path.join(data_dir, "clean_data.json")
     images_dir = os.path.join(data_dir, "images")
     dict_path = os.path.join(data_dir, "card_dict.pt")
-    output_path = os.path.join(data_dir, "card_repr_dict_v1.pt") # v1-> only hand coded features; v2 -> features AND image
+    output_path = ""
+    # v1-> only hand coded features; v2 -> features AND image
+    if use_img:
+        os.path.join(data_dir, "card_repr_dict_v2.pt")
+    else:
+        os.path.join(data_dir, "card_repr_dict_v1.pt")
     encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -352,7 +357,7 @@ def build_card_representations(batch_size=8, use_img=True):
     rarity_levels = ["common", "uncommon", "rare", "mythic"]
     color_id_levels = ["W", "U", "B", "R", "G", "C"]
 
-    card_repr = {}
+    card_repr = {} # Used to save all card representations
 
     def safe_int(val): # Used to safely interpret power and toughness
         if val == '*':
@@ -362,9 +367,9 @@ def build_card_representations(batch_size=8, use_img=True):
         except (TypeError, ValueError):
             return -1
 
-    def extract_cmc(str): # Converts a curly-brace mana cost string into its total integer cost
+    def extract_cmc(mana_cost): # Converts a curly-brace mana cost string into its total integer cost
         if not mana_cost:
-        return -1
+            return -1
         symbols = re.findall(r"\{([^}]+)\}", mana_cost)
         if not symbols:
             return 0
@@ -420,7 +425,7 @@ def build_card_representations(batch_size=8, use_img=True):
                 torch.as_tensor(rarity_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(color_id_encoded, dtype=torch.float32, device="cpu"),
-                torch.as_tensor(cmc, dtype=torch.float32, device="cpu"),
+                torch.tensor([cmc], dtype=torch.float32),
                 text_emb_batch[i].to("cpu")
             ]
             if use_img:
@@ -442,7 +447,7 @@ def build_card_representations(batch_size=8, use_img=True):
         process_batch(batch)
 
     try:
-        torch.save(output_path, output_path)
+        torch.save(card_repr, output_path)
         print(f"Successfully saved dictionary to: {output_path}")
     except Exception as e:
         print(f"\nError saving dictionary to {output_path}: {e}")    
@@ -470,5 +475,8 @@ if __name__ == "__main__":
     # utils.generate_and_save_dict()
 
     # print(count_cards(clean_data))
-
+    print("creatimg embeddings with only hand coded features")
     build_card_representations(batch_size=16, use_img=False)
+    print("creatimg embeddings with hand coded features and image")
+    build_card_representations(batch_size=16, use_img=True)
+    
