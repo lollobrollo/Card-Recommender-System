@@ -8,9 +8,11 @@ from PIL import Image
 import os
 
 
+# - - - - - - - - - - - - - - - - - Models for card image representation - - - - - - - - - - - - - - - - - 
+
 class HybridConvAutoencoder(nn.Module):
     def __init__(self, latent_dim=1024):
-        super().__init__()        
+        super().__init__()
         self.encoder_conv = nn.Sequential(
             # Input: (N, 3, 936, 672), not considering batch size
             nn.Conv2d(3, 16, kernel_size=3, padding=1), nn.ReLU(True), nn.MaxPool2d(2, 2),  # -> (16, 468, 336)
@@ -79,3 +81,142 @@ class CardImageDataset(Dataset):
         img = self.transform(Image.open(img_path).convert('RGB'))
         return img
 
+
+# - - - - - - - - - - - - - - - - - Models for contextual preference ranking pipeline - - - - - - - - - - - - - - - - - 
+
+
+class CardEncoder_v1(nn.Module):
+    def __init__(self, card_dim=1446, hidden_dim=1024, out_dim=512, p_drop=0.3):
+        super().__init__()
+    
+        self.MLP = nn.Sequential(
+            nn.Linear(card_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop)
+        )
+
+        self.out = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        # Assuming x of size (n_batch, input_dim)
+        x = self.MLP(x)
+        x = self.out(x)
+        return F.normalize(x, p=2, dim=1)
+
+
+class DeckEncoder_v1(nn.Module):
+    """
+    Treats the deck as a sequence of cards -> uses Conv1d to extract features
+    """
+    def __init__(self, card_dim=1446, out_dim=512):
+        super().__init__()
+
+        self.conv_layers = nn.Sequential(
+            nn.Conv1d(in_channels=card_dim, out_channels=128, kernel_size=3, padding=1),
+            nn.BatchNorm1d(128), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(in_channels=256, out_channels=128, kernel_size=3, padding=1),
+            nn.BatchNorm1d(128), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
+            nn.Conv1d(in_channels=128, out_channels=64, kernel_size=3, padding=1),
+            nn.BatchNorm1d(64), nn.ELU(True),
+            nn.AdaptiveMaxPool1d(1)
+        )
+
+        self.out = nn.Sequential(
+            nn.Flatten(start_dim=1),  # (Batch, 64, 1) -> (Batch, 64)
+            nn.Linear(64, out_dim)
+        )
+
+    def forward(self, x):
+        # Permute the dimensions to match Conv1d's expectation.
+        # (Batch, Num Cards, Card Dim) -> (Batch, Card Dim, Num Cards)
+        x = x.permute(0, 2, 1)
+        x = self.conv_layers(x)
+        x = self.out(x)
+        return F.normalize(x, p=2, dim=1)
+
+
+class DeckEncoder_v2(nn.Module):
+    """
+    Treats the deck as an image -> uses Conv2d to extract features
+    """
+    def __init__(self, output_dim=512):
+        super().__init__()
+
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+            nn.Conv2d(in_channels=64, out_channels=32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+            nn.Conv2d(in_channels=32, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16), nn.ELU(True), nn.MaxPool2d(kernel_size=(2,2), stride=2),
+        )
+
+        self.out = nn.Sequential(
+            nn.AdaptiveMaxPool2d(output_size=1),
+            nn.Flatten(start_dim=1),
+            nn.Linear(16, output_dim)
+        )
+
+    def forward(self, x):
+    # x is expected to be (batch_size, num_cards, card_vector_dim)
+    # Using unsqueeze to artificially create a color channel (deck as a greyscale image)
+        x = x.unsqueeze(1)
+        x = self.conv_layers(x)
+        x = self.out(x)
+        return F.normalize(x, p=2, dim=1)
+
+
+class SiameseHead(nn.Module):
+    def __init__(self, input_dim=512, hidden_dim=512, out_dim=2, p_drop=0.3):
+        super().__init__()
+
+        self.MLP = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
+            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop)
+        )
+
+        self.out = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, x):
+        # Expected input: (batch_size, input_dim)
+        x = self.MLP(x)
+        x = self.out(x)
+        return torch.tanh(x)
+
+
+class PipelineCPR(nn.Module):
+    def __init__(self, card_dim, card_hidden_dim, embed_dim=512, out_dim=2):
+        super().__init__()
+
+        self.card_encoder = CardEncoder_v1(card_dim=card_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)
+        self.deck_encoder = DeckEncoder_v1(card_dim=card_dim, out_dim=embed_dim)
+        self.siamese_head = SiameseHead(input_dim=embed_dim, hidden_dim=embed_dim, out_dim=out_dim)
+
+    def forward(self, a, p, n):
+        anchor = self.siamese_head(self.deck_encoder(a))
+        positive = self.siamese_head(self.card_encoder(p))
+        negative = self.siamese_head(self.card_encoder(n))
+
+        return anchor, positive, negative
+
+
+class DatasetCPR(Dataset):
+    def __init__(self):
+        pass
+
+    def __len__(self):
+        pass
+    
+    def __getitem__(self):
+        pass
