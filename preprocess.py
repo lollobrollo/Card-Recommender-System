@@ -340,11 +340,10 @@ def build_card_representations(batch_size=8, use_img=False):
     images_dir = os.path.join(data_dir, "images")
     dict_path = os.path.join(data_dir, "card_dict.pt")
     output_path = ""
-    # v1-> only hand coded features; v2 -> features AND image
     if use_img:
-        os.path.join(data_dir, "card_repr_dict_v2.pt")
+        output_path = os.path.join(data_dir, "card_repr_dict_v2.pt")
     else:
-        os.path.join(data_dir, "card_repr_dict_v1.pt")
+        output_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -448,9 +447,9 @@ def build_card_representations(batch_size=8, use_img=False):
 
     try:
         torch.save(card_repr, output_path)
-        print(f"Successfully saved dictionary to: {output_path}")
+        print(f"Successfully saved dictionary to: {output_path}\n")
     except Exception as e:
-        print(f"\nError saving dictionary to {output_path}: {e}")    
+        print(f"\nError saving dictionary to {output_path}: {e}\n")    
 
 
 
@@ -475,8 +474,7 @@ if __name__ == "__main__":
     # utils.generate_and_save_dict()
 
     # print(count_cards(clean_data))
-    print("creatimg embeddings with only hand coded features")
+
     build_card_representations(batch_size=16, use_img=False)
-    print("creatimg embeddings with hand coded features and image")
     build_card_representations(batch_size=16, use_img=True)
     

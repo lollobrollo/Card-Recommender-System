@@ -200,7 +200,7 @@ def get_all_card_types_and_keywords(json_path):
     except FileNotFoundError:
         print(f"Error: Data file not found at {json_path}")
         return set()
-    print(f"\nExtraction complete.\nFound {len(all_types)} unique types, supertypes, and subtypes.\nFound {len(all_keywords)} unique keywords.")
+    print(f"Extraction complete.\nFound {len(all_types)} unique types, supertypes, and subtypes.\nFound {len(all_keywords)} unique keywords.")
 
     return sorted(list(all_types)), sorted(list(all_keywords)) 
 
