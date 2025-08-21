@@ -14,8 +14,8 @@ import re
 def generate_and_save_dict():
     """
     Using data/clean_data.json, creates a dictionary of cards with
-     - key: the card oracle id
-     - value: the card name
+     - key: the card name
+     - value: the card oracle id
     Filters out cards without an associated image in data/images
     Saves the dictionary into data/card_dict.pt
     """
@@ -46,7 +46,7 @@ def generate_and_save_dict():
                 oracle_id = card.get('oracle_id')
                 # Only add the card if its oracle_id has a corresponding image
                 if oracle_id and oracle_id in available_image_ids:
-                    card_dict[oracle_id] = card.get('name')
+                    card_dict[card.get('name')] = oracle_id
     except FileNotFoundError:
         print(f"Error: Clean data file not found at {json_path}")
         return
@@ -319,5 +319,6 @@ if __name__ == "__main__":
     img_dir = os.path.join(this, "data", "images")
     dataset_path = os.path.join(this, "data", "img_dataset.pt")
     checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+    generate_and_save_dict()
     # save_dataset_to_pt(img_dir, dataset_path)
-    show_reconstructions(checkpoint_path, img_dir)
+    # show_reconstructions(checkpoint_path, img_dir)
