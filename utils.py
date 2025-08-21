@@ -13,9 +13,7 @@ import re
 
 def generate_and_save_dict():
     """
-    Using data/clean_data.json, creates a dictionary of cards with
-     - key: the card name
-     - value: the card oracle id
+    Using data/clean_data.json, builds a case-insensitive map from card name to oracle_id
     Filters out cards without an associated image in data/images
     Saves the dictionary into data/card_dict.pt
     """
@@ -46,7 +44,8 @@ def generate_and_save_dict():
                 oracle_id = card.get('oracle_id')
                 # Only add the card if its oracle_id has a corresponding image
                 if oracle_id and oracle_id in available_image_ids:
-                    card_dict[card.get('name')] = oracle_id
+                    name = card.get('name').lower()
+                    card_dict[name] = oracle_id
     except FileNotFoundError:
         print(f"Error: Clean data file not found at {json_path}")
         return
