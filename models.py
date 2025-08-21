@@ -6,7 +6,8 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
 import os
-
+import random
+from torch.nn.utils.rnn import pad_sequence
 
 # - - - - - - - - - - - - - - - - - Models for card image representation - - - - - - - - - - - - - - - - - 
 
@@ -93,15 +94,12 @@ class CardEncoder_v1(nn.Module):
             nn.Linear(card_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
             nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
             nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
-            nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop)
+            nn.Linear(hidden_dim, output_dim)
         )
-
-        self.out = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
         # Assuming x of size (n_batch, input_dim)
         x = self.MLP(x)
-        x = self.out(x)
         return F.normalize(x, p=2, dim=1)
 
 
@@ -113,20 +111,19 @@ class DeckEncoder_v1(nn.Module):
         super().__init__()
 
         self.conv_layers = nn.Sequential(
-            nn.Conv1d(in_channels=card_dim, out_channels=128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(in_channels=256, out_channels=128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128), nn.ELU(True), nn.MaxPool1d(kernel_size=2, stride=2),
-            nn.Conv1d(in_channels=128, out_channels=64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64), nn.ELU(True),
+            nn.Conv1d(in_channels=card_dim, out_channels=16, kernel_size=3, padding=1),
+            nn.BatchNorm1d(16), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(16, 32, 3, padding=1), nn.BatchNorm1d(32), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(32, 64, 3, padding=1), nn.BatchNorm1d(64), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(64, 64, 3, padding=1), nn.BatchNorm1d(64), nn.ELU(True),
+            nn.Conv1d(64, 32, 3, padding=1), nn.BatchNorm1d(32), nn.ELU(True),
+            nn.Conv1d(32, 16, 3, padding=1), nn.BatchNorm1d(16), nn.ELU(True),
             nn.AdaptiveMaxPool1d(1)
         )
 
         self.out = nn.Sequential(
             nn.Flatten(start_dim=1),  # (Batch, 64, 1) -> (Batch, 64)
-            nn.Linear(64, out_dim)
+            nn.Linear(16, out_dim)
         )
 
     def forward(self, x):
@@ -203,20 +200,86 @@ class PipelineCPR(nn.Module):
         self.deck_encoder = DeckEncoder_v1(card_dim=card_dim, out_dim=embed_dim)
         self.siamese_head = SiameseHead(input_dim=embed_dim, hidden_dim=embed_dim, out_dim=out_dim)
 
+    def card_embedding(self, x):
+        return self.siamese_head(self.card_encoder(x))
+
+    def deck_embedding(self, x):
+        return self.siamese_head(self.deck_encoder(x))
+
     def forward(self, a, p, n):
-        anchor = self.siamese_head(self.deck_encoder(a))
-        positive = self.siamese_head(self.card_encoder(p))
-        negative = self.siamese_head(self.card_encoder(n))
+        anchor = self.deck_embedding(a)
+        positive = self.card_embedding(p)
+        negative = self.card_embedding(n)
 
         return anchor, positive, negative
 
 
-class DatasetCPR(Dataset):
-    def __init__(self):
-        pass
+class TripletEDHDataset(Dataset):
+    """
+    PyTorch Dataset that generates training triplets on the fly for the PipelineCPR
+    """
+    def __init__(self, decklists, card_feature_map, anchor_size_range=(50, 95)):
+        """
+        Args:
+            decklists (list): A list of lists containing the oracle_ids of the 100 cards in a deck
+            card_feature_map (dict): A dictionary mapping an oracle_id to its pre-computed feature tensor
+            anchor_size_range (tuple): A (min, max) tuple for the number of cards to randomly select for the anchor deck.
+        """
+        # Filter out any decks that are too small to sample from
+        self.decklists = [deck for deck in decklists if len(deck) > 1]
+        self.card_feature_map = card_feature_map
+        self.all_card_ids = list(card_feature_map.keys()) #used for negative sampling
+        self.anchor_size_range = anchor_size_range
 
     def __len__(self):
-        pass
-    
-    def __getitem__(self):
-        pass
+        return len(self.decklists)
+
+    def __getitem__(self, idx):
+        deck = self.decklists[idx]
+        deck_set = set(deck)
+        random.shuffle(deck) # Shuffle the deck in-place to ensure a different random split on every epoch
+
+        max_possible_anchor_size = len(deck) - 1
+        min_anchor = min(self.anchor_size_range[0], max_possible_anchor_size)
+        max_anchor = min(self.anchor_size_range[1], max_possible_anchor_size)
+        if min_anchor >= max_anchor:
+            anchor_size = max_possible_anchor_size
+        else:
+            anchor_size = random.randint(min_anchor, max_anchor)
+
+        anchor_deck_ids = deck[:anchor_size]
+        holdout_ids = deck[anchor_size:]
+        positive_card_id = random.choice(holdout_ids)
+
+        # Find a Negative Card: a random card from the card pool not present in the original decklist.
+        negative_card_id = None
+        while negative_card_id is None or negative_card_id in deck_set:
+            negative_card_id = random.choice(self.all_card_ids)
+
+        positive_card_tensor = self.card_feature_map[positive_card_id]
+        negative_card_tensor = self.card_feature_map[negative_card_id]
+        
+        anchor_deck_tensors = torch.stack([self.card_feature_map[id] for id in anchor_deck_ids])
+
+        return anchor_deck_tensors, positive_card_tensor, negative_card_tensor
+
+
+def triplet_collate_fn(batch):
+    """
+    A custom collate function to handle variable-length anchor decks in a batch:
+    it pads the anchor decks to the same length and stacks the cards.
+    """
+    # Separate the components of the batch
+    anchor_decks = [item[0] for item in batch]
+    positive_cards = [item[1] for item in batch]
+    negative_cards = [item[2] for item in batch]
+
+    # Use pad_sequence to handle the variable-length anchor decks.
+    # `batch_first=True` ensures the output shape is (Batch Size, Max_Seq_Len, Feature_Dim)
+    padded_anchors = pad_sequence(anchor_decks, batch_first=True, padding_value=0.0)
+
+    # Stack the positive and negative cards, which are already of a fixed size
+    batched_positives = torch.stack(positive_cards)
+    batched_negatives = torch.stack(negative_cards)
+
+    return padded_anchors, batched_positives, batched_negatives
