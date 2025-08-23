@@ -68,8 +68,8 @@ def load_name_maps(card_dict_path: str):
     if not os.path.exists(card_dict_path):
         print(f"Card dictionary not found at '{card_dict_path}'"); return None, None
     
-    name_to_id_map = load(card_dict_path)
-    name_to_id_map = {key: normalize_card_name(val) for key,val in name_to_id_map.items()}
+    loaded_dict = load(card_dict_path)
+    name_to_id_map = {normalize_card_name(name):oid for name,oid in loaded_dict.items()}
     known_oracle_ids = set(name_to_id_map.values())
     return name_to_id_map, known_oracle_ids
 
@@ -101,12 +101,12 @@ def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
     while fetched < limit:
         rate.wait()
-        url = f"{ARCHIDEKT_BASE}/decks"
+        url = f"{ARCHIDEKT_BASE}/decks/v3/"
         params = {
-            "formats": [15], # 15 is the numerical id for Commander
+            "orderBy": "-createdAt",
+            "formats": [3], # numerical id for Commander
             "pageSize": 50,
-            "page": page,
-            "orderBy": "-createdAt"
+            "page" : page
         }
         try:
             data = http_get_json(url, params=params, headers=headers)
@@ -122,9 +122,9 @@ def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
             break
 
 
-def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], rate: SimpleRateLimiter) -> Optional[Deck]:
+def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
-    url = f"{ARCHIDEKT_BASE}/decks/{deck_id}/"
+    url = f"{ARCHIDEKT_BASE}/decks/v3/{deck_id}/"
     rate.wait()
 
     try:
@@ -136,7 +136,7 @@ def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], rate: SimpleR
             card_info = c.get('card', {}).get('oracleCard', {})
             name = card_info.get('name'); oid = card_info.get('scryfallOracleId')
 
-            if not (name and oid and oid in known_ids): continue
+            if not (name and oid and oid in known_ids): continue # Ignore cards for which I have no representation
 
             if is_commander:
                 commanders.append(name); commander_ids.append(oid)
@@ -158,6 +158,8 @@ def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], rate: SimpleR
     except Exception:
         return None
 
+""" 
+# I can ask for permission of use for non-commercial project https://moxfield.com/help/faq#moxfield-api
 
 MOXFIELD_BASE = "https://api.moxfield.com/v2"
 
@@ -206,6 +208,7 @@ def moxfield_fetch_deck(public_id: str, name_to_id: Dict[str, str], rate: Simple
     except Exception:
         return None
 
+"""
 
 def color_bucket(ci: List[str]) -> str:
     unique_colors = set(c for c in ci if c)
@@ -252,7 +255,7 @@ def main(   card_dict: str,
             max_moxfield: int = 800,
             per_bucket: int = 200,
             anchor_sizes: Optional[List[int]] = None,
-            rate_per_sec: float = 2.0) -> None:
+            rate_per_sec: float = 2.0):
 
     os.makedirs(os.path.dirname(out_jsonl) or '.', exist_ok=True)
     name_to_id, known_oracle_ids = load_name_maps(card_dict_path)
@@ -266,9 +269,11 @@ def main(   card_dict: str,
     for meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
         did = meta.get('id')
         if did:
-            d = archidekt_fetch_deck(int(did), name_to_id, rate)
+            d = archidekt_fetch_deck(int(did), name_to_id, known_oracle_ids, rate)
             if d: decks.append(d)
 
+    """ 
+    # Not used for now
     print("Fetching Moxfield decks…")
     fetched = 0; page = 1
     with tqdm(total=max_moxfield) as pbar:
@@ -288,6 +293,7 @@ def main(   card_dict: str,
                 page += 1
             except Exception as e:
                 print(f"Warning: Error on Moxfield page {page}: {e}. Skipping page."); page += 1
+    """
 
     uniq = {(d.source, d.deck_id): d for d in decks}
     decks = list(uniq.values())
@@ -314,9 +320,9 @@ if __name__ == "__main__":
     main(
         card_dict=card_dict_path,
         out_jsonl=output_path,
-        max_archidekt=1000,
-        max_moxfield=1000,
-        per_bucket=250,
+        max_archidekt=50,
+        #max_moxfield=100,
+        per_bucket=500,
         anchor_sizes=[50, 75, 90],
         rate_per_sec=4.0
     )
