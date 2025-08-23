@@ -24,6 +24,8 @@ from typing import Dict, List, Optional, Tuple, Iterable, Set
 import requests
 import random
 from tqdm import tqdm
+import re
+
 
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 2.0):
@@ -55,6 +57,23 @@ def http_get_json(url: str, params: Optional[dict] = None, headers: Optional[dic
     raise ex
 
 
+def normalize_card_name(name: str) -> str: # To make mapping more consistent
+    name = name.lower()
+    if ' // ' in name: name = name.split(' // ')[0]
+    name = re.sub(r"[^\w\s]", '', name)
+    return name.strip()
+
+
+def load_name_maps(card_dict_path: str):
+    if not os.path.exists(card_dict_path):
+        print(f"Card dictionary not found at '{card_dict_path}'"); return None, None
+    
+    name_to_id_map = load(card_dict_path)
+    name_to_id_map = {key: normalize_card_name(val) for key,val in name_to_id_map.items()}
+    known_oracle_ids = set(name_to_id_map.values())
+    return name_to_id_map, known_oracle_ids
+
+
 @dataclass
 class Deck:
     deck_id: str
@@ -64,7 +83,7 @@ class Deck:
     commander_ids: List[str]  # oracle_ids
     color_identity: List[str]  # e.g., ["U","R"]
     tags: List[str]
-    power: Optional[str]  # e.g., 'cEDH', 'casual', etc. (best-effort)
+    power: Optional[str]  # 'cEDH', 'casual', etc. (best-effort)
     budget: Optional[float]  # USD if available
     size: int  # number of mainboard cards (non-commander)
     mainboard_ids: List[str]  # oracle_ids
@@ -78,104 +97,64 @@ ARCHIDEKT_BASE = "https://archidekt.com/api"
 
 def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
     """Yield Commander deck search results (metadata pages)."""
-    page = 1
-    fetched = 0
+    page = 1; fetched = 0
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
     while fetched < limit:
         rate.wait()
-        url = f"{ARCHIDEKT_BASE}/decks/"
+        url = f"{ARCHIDEKT_BASE}/decks"
         params = {
-            "format": "Commander",
+            "formats": [15], # 15 is the numerical id for Commander
             "pageSize": 50,
             "page": page,
             "orderBy": "-createdAt"
         }
-        data = http_get_json(url, params=params, headers=headers)
-        results = data.get('results', [])
-        if not results:
+        try:
+            data = http_get_json(url, params=params, headers=headers)
+            results = data.get('results', [])
+            if not results: break
+            for item in results:
+                yield item
+                fetched += 1
+                if fetched >= limit: break
+            page += 1
+        except Exception as e:
+            print(f"Warning: Archidekt search failed on page {page}: {e}. Stopping Archidekt search.")
             break
-        for item in results:
-            yield item
-            fetched += 1
-            if fetched >= limit:
-                break
-        page += 1
 
 
 def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], rate: SimpleRateLimiter) -> Optional[Deck]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
     url = f"{ARCHIDEKT_BASE}/decks/{deck_id}/"
     rate.wait()
-    data = http_get_json(url, headers=headers)
-
-    # Extract commanders and mainboard
-    commanders: List[str] = []
-    commander_ids: List[str] = []
-    main_ids: List[str] = []
-    color_identity: List[str] = []
-    tags: List[str] = []
-    power: Optional[str] = None
-    budget: Optional[float] = None
 
     try:
-        deck_name = data.get('name')
-        # Tags/hubs
-        if isinstance(data.get('tags'), list):
-            tags = [str(t) for t in data['tags']]
-        # Budget (best effort)
-        if isinstance(data.get('prices'), dict):
-            budget = data['prices'].get('usd')
-
-        # Cards
+        data = http_get_json(url, headers=headers)
+        commanders, commander_ids, main_ids = [], [], []
         for c in data.get('cards', []):
-            # Commander cards are marked in category
-            cat = (c.get('category') or "").lower()
-            is_commander = 'commander' in cat
-            qty = int(c.get('quantity') or 0)
-            scry_oracle = (
-                c.get('card', {})
-                 .get('oracleCard', {})
-                 .get('scryfallOracleId')
-            )
-            name = c.get('card', {}).get('oracleCard', {}).get('name') or c.get('card', {}).get('name')
-            if not name:
-                continue
-            oid = scry_oracle or name_to_id.get(name.lower())
-            if not oid:
-                continue
+            is_commander = 'commander' in (c.get('category') or "").lower()
+            qty = int(c.get('quantity') or 1)
+            card_info = c.get('card', {}).get('oracleCard', {})
+            name = card_info.get('name'); oid = card_info.get('scryfallOracleId')
+
+            if not (name and oid and oid in known_ids): continue
+
             if is_commander:
-                commanders.append(name)
-                commander_ids.append(oid)
+                commanders.append(name); commander_ids.append(oid)
             else:
-                # mainboard: repeat by quantity
-                for _ in range(qty or 1):
-                    if oid in name_to_id.values(): # Only keep if I have a representation for this card
-                        main_ids.append(oid)
+                main_ids.extend([oid] * qty)
 
-        # Fallback color identity from commanders
-        if data.get('colors'):
-            color_identity = [c for c in data['colors'] if isinstance(c, str)]
-        elif commander_ids:
-            # derive from commanders' printed identity if provided (not always available via API)
-            pass
-
-        size = len(main_ids)
-        if not commanders or size + len(commander_ids) != 100:  # Only keep legal EDH decks
-            return None
-
-        return Deck(
-            deck_id=str(deck_id),
-            source='archidekt',
-            name=deck_name,
-            commanders=commanders,
-            commander_ids=commander_ids,
-            color_identity=color_identity,
-            tags=tags,
-            power=power,
-            budget=budget,
-            size=size,
-            mainboard_ids=main_ids,
-        )
+        if not commanders or (len(main_ids) + len(commander_ids)) != 100: return None
+        
+        return Deck(deck_id=str(deck_id),
+                    source='archidekt',
+                    name=data.get('name'),
+                    commanders=commanders,
+                    commander_ids=commander_ids,
+                    color_identity=list(data.get('colors', {}).keys()),
+                    tags=[str(t.get('name')) for t in data.get('tags', []) if t.get('name')],
+                    power=None, budget=data.get('prices', {}).get('usd'),
+                    size=len(main_ids),
+                    mainboard_ids=main_ids)
     except Exception:
         return None
 
@@ -184,10 +163,9 @@ MOXFIELD_BASE = "https://api.moxfield.com/v2"
 
 
 def moxfield_search_commander(page: int, rate: SimpleRateLimiter) -> List[dict]:
-    headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
-    # Sort by recency and popularity to diversify
-    q = "format:commander -private"
-    params = {"q": q, "pageNumber": page, "pageSize": 50, "sortType": "updated"}
+    headers = { "User-Agent": "edh-dataset-bot/0.1 (contact: research)",
+                "Referer": "https://www.moxfield.com/decks"}
+    params = {"q": "format:commander -private", "pageNumber": page, "pageSize": 50, "sortType": "updated"}
     rate.wait()
     return http_get_json(f"{MOXFIELD_BASE}/decks/search", params=params, headers=headers).get('data', [])
 
@@ -198,66 +176,43 @@ def moxfield_fetch_deck(public_id: str, name_to_id: Dict[str, str], rate: Simple
     data = http_get_json(f"{MOXFIELD_BASE}/decks/all/{public_id}", headers=headers)
 
     try:
-        meta = data.get('deck', {})
-        board = data.get('boards', {})
-        main = board.get('mainboard', {}) or {}
-        commanders_board = board.get('commanders', {}) or {}
-
-        # Commanders
-        commanders: List[str] = []
-        commander_ids: List[str] = []
+        data = http_get_json(f"{MOXFIELD_BASE}/decks/all/{public_id}", headers=headers)
+        meta = data.get('deck', {}); board = data.get('boards', {})
+        main = board.get('mainboard', {}) or {}; commanders_board = board.get('commanders', {}) or {}
+        commanders, commander_ids, main_ids = [], [], []
+        
         for entry in commanders_board.values():
-            card_obj = entry.get('card', {})
-            name = card_obj.get('name')
-            oid = card_obj.get('scryfallOracleId') or name_to_id.get((name or '').lower())
-            if name and oid:
-                commanders.append(name)
-                commander_ids.append(oid)
+            card_obj = entry.get('card', {}); name = card_obj.get('name')
+            oid = card_obj.get('scryfallOracleId') or name_to_id.get(normalize_card_name(name or ''))
+            if name and oid and oid in known_ids: commanders.append(name); commander_ids.append(oid)
 
-        # Mainboard
-        main_ids: List[str] = []
         for entry in main.values():
-            qty = int(entry.get('quantity') or 1)
-            card_obj = entry.get('card', {})
-            name = card_obj.get('name')
-            oid = card_obj.get('scryfallOracleId') or name_to_id.get((name or '').lower())
-            if oid:
-                for _ in range(qty or 1):
-                    if oid in name_to_id.values():
-                        main_ids.append(oid)
+            qty = int(entry.get('quantity') or 1); card_obj = entry.get('card', {}); name = card_obj.get('name')
+            oid = card_obj.get('scryfallOracleId') or name_to_id.get(normalize_card_name(name or ''))
+            if oid and oid in known_ids: main_ids.extend([oid] * qty)
 
-        color_identity = meta.get('colorIdentity') or []
-        tags = meta.get('hubTags') or []
-        # Power/budget best-effort
-        power = None
-        budget = None
-        if isinstance(meta.get('price'), dict):
-            budget = meta['price'].get('market')
+        if not commanders or (len(main_ids) + len(commander_ids)) != 100: return None
 
-        size = len(main_ids)
-        if not commanders or size + len(commander_ids) != 100:  # only legal EDH decks
-            return None
-
-        return Deck(
-            deck_id=meta.get('publicId') or public_id,
-            source='moxfield',
-            name=meta.get('name'),
-            commanders=commanders,
-            commander_ids=commander_ids,
-            color_identity=color_identity,
-            tags=tags,
-            power=power,
-            budget=budget,
-            size=size,
-            mainboard_ids=main_ids,
-        )
+        return Deck(deck_id=meta.get('publicId') or public_id,
+                    source='moxfield',
+                    name=meta.get('name'),
+                    commanders=commanders,
+                    commander_ids=commander_ids,
+                    color_identity=meta.get('colorIdentity') or [],
+                    tags=meta.get('hubTags') or [],
+                    power=None, budget=meta.get('price', {}).get('market'),
+                    size=len(main_ids),
+                    mainboard_ids=main_ids)
     except Exception:
         return None
 
 
 def color_bucket(ci: List[str]) -> str:
-    n = len(set(ci))
-    return f"{n}-color"
+    unique_colors = set(c for c in ci if c)
+    if not unique_colors:
+        return "C"
+    sorted_colors = sorted(list(unique_colors))
+    return "".join(sorted_colors)
 
 
 def diversify(decks: List[Deck], per_bucket: int = 200) -> List[Deck]:
@@ -272,13 +227,11 @@ def diversify(decks: List[Deck], per_bucket: int = 200) -> List[Deck]:
         kept = 0
         for d in arr:
             key = tuple(sorted(d.commander_ids))
-            if key in seen_cmdr:
-                continue
+            if key in seen_cmdr: continue
             out.append(d)
             seen_cmdr.add(key)
             kept += 1
-            if kept >= per_bucket:
-                break
+            if kept >= per_bucket: break
     return out
 
 
@@ -302,92 +255,68 @@ def main(   card_dict: str,
             rate_per_sec: float = 2.0) -> None:
 
     os.makedirs(os.path.dirname(out_jsonl) or '.', exist_ok=True)
-    name_to_id = load(card_dict) # torch.load
+    name_to_id, known_oracle_ids = load_name_maps(card_dict_path)
+    if not name_to_id: return
 
     rate = SimpleRateLimiter(per_sec=rate_per_sec)
 
-    # 1) Collect decks
-    decks: List[Deck] = []
+    decks = []
 
-    # Archidekt
-    count = 0
-    for meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), desc="Fetching Archidekt deck summaries…", total=max_archidekt):
+    print("Fetching Archidekt decks…")
+    for meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
         did = meta.get('id')
-        if did is None:
-            continue
-        d = archidekt_fetch_deck(int(did), name_to_id, rate)
-        if d:
-            decks.append(d)
-        count += 1
-        if count % 50 == 0:
-            print(f"  Archidekt processed: {count}")
+        if did:
+            d = archidekt_fetch_deck(int(did), name_to_id, rate)
+            if d: decks.append(d)
 
-    # Moxfield
-    print("Fetching Moxfield deck summaries…")
-    fetched = 0
-    page = 1
-    
+    print("Fetching Moxfield decks…")
+    fetched = 0; page = 1
     with tqdm(total=max_moxfield) as pbar:
         while fetched < max_moxfield:
-            results = moxfield_search_commander(page=page, rate=rate)
-            if not results:
-                break
-            for row in results:
-                pid = row.get('publicId')
-                if not pid:
-                    continue
-                d = moxfield_fetch_deck(pid, name_to_id, rate)
-                if d:
-                    decks.append(d)
-                    fetched += 1
-                    pbar.update(1)
-                if fetched >= max_moxfield:
-                    break
-            page += 1
-            if page % 5 == 0:
-                print(f"  Moxfield pages processed: {page-1}")
-        if page % 5 == 0:
-            pbar.set_description(f"Pages processed: {page-1}")
+            try:
+                results = moxfield_search_commander(page=page, rate=rate)
+                if not results: break
+                for row in results:
+                    if fetched >= max_moxfield: break
+                    pid = row.get('publicId')
+                    if pid:
+                        d = moxfield_fetch_deck(pid, name_to_id, rate)
+                        if d:
+                            decks.append(d)
+                            fetched += 1
+                            pbar.update(1)
+                page += 1
+            except Exception as e:
+                print(f"Warning: Error on Moxfield page {page}: {e}. Skipping page."); page += 1
 
-    # 2) Dedupe by (source,id)
-    uniq: Dict[Tuple[str, str], Deck] = {}
-    for d in decks:
-        uniq[(d.source, d.deck_id)] = d
+    uniq = {(d.source, d.deck_id): d for d in decks}
     decks = list(uniq.values())
-    print(f"Collected {len(decks)} unique decks before diversification.")
-
-    # 3) Diversify by color buckets and commander uniqueness
+    print(f"\nCollected {len(decks)} unique decks before diversification.")
     decks = diversify(decks, per_bucket=per_bucket)
     print(f"Kept {len(decks)} decks after diversification.")
 
-    # 4) Save to JSONL (with optional anchor slices)
     with open(out_jsonl, 'w', encoding='utf-8') as f:
-        for d in decks:
+        for d in tqdm(decks, desc="Saving decks to JSONL"):
             row = asdict(d)
             if anchor_sizes:
                 row['anchors'] = make_anchor_slices(d, anchor_sizes)
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
-    print(f"Wrote {len(decks)} decks → {out_jsonl}")
+    print(f"Wrote {len(decks)} decks into {out_jsonl}")
 
 
 
 if __name__ == "__main__":
-    this = os.path.dirname(__file__)
-
-    card_dict = os.path.join(this, "data", "card_dict.pt")
-    output=os.path.join(this, "data", "edh_decks.jsonl")
-    max_archidekt = 800
-    max_moxfield = 800
-    per_bucket = 100
-    anchor_sizes = [25, 50, 75, 90]
-    rate = 8
-
+    this = os.path.dirname(__file__) or "."
+    
+    card_dict_path = os.path.join(this, "data", "card_dict.pt")
+    output_path = os.path.join(this, "data", "edh_decks.jsonl")
+    
     main(
-        card_dict=card_dict,
-        out_jsonl=output,
-        max_archidekt=max_archidekt,
-        max_moxfield=max_moxfield,
-        per_bucket=per_bucket,
-        anchor_sizes=anchor_sizes,
-        rate_per_sec=rate,
+        card_dict=card_dict_path,
+        out_jsonl=output_path,
+        max_archidekt=1000,
+        max_moxfield=1000,
+        per_bucket=250,
+        anchor_sizes=[50, 75, 90],
+        rate_per_sec=4.0
     )
