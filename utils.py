@@ -1,14 +1,13 @@
-from models import *
 import torch
 import torch.nn as nn
 from torchvision import transforms
 import os
 import torch
 from PIL import Image
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import ijson
 import re
+import json
 
 
 def generate_and_save_dict():
@@ -114,67 +113,6 @@ def save_dataset_to_pt(img_dir, output_file):
     """
     dataset = CardImageDataset(img_dir)
     torch.save(dataset, output_file)
-
-
-def load_img_encoder(checkpoint_path, device = 'cuda' if torch.cuda.is_available() else 'cpu'):
-    """
-    Loads the weithts of the trained autoencoder and returns an object containing the encoder for inference
-    Args:
-        checkpoint_path (str): Path to the checkpoint containing weights of the trained encoder
-        device (str): Device to use the model on
-    """
-    encoder = HybridConvAutoencoder()
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model_state_dict = checkpoint['model_state_dict']
-    encoder.load_state_dict(model_state_dict)
-    encoder.to(device)
-    encoder.eval()
-    return encoder
-
-
-def show_reconstructions(checkpoint_path, img_dir, device='cuda' if torch.cuda.is_available() else 'cpu', num_images=5):
-    """
-    Shows original card images and reconstrucitons side by side for some cards
-    """
-    
-    model = load_img_encoder(checkpoint_path, device=device)
-    
-    transform = transforms.Compose([
-        transforms.Resize((936, 672)),
-        transforms.ToTensor(),
-    ])
-
-    image_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir)]
-    image_files = image_files[:num_images]
-
-    original_images = []
-    reconstructed_images = []
-    with torch.no_grad():
-        for img_path in image_files:
-            img = Image.open(img_path).convert('RGB')
-            input_tensor = transform(img).unsqueeze(0).to(device)  # (1, 3, 936, 672)
-
-            output = model(input_tensor)
-
-            original_images.append(input_tensor.squeeze(0).cpu())
-            reconstructed_images.append(output.squeeze(0).cpu())
-
-    plt.figure(figsize=(12, 4 * num_images))
-    for i in range(num_images):
-        # Original image
-        plt.subplot(num_images, 2, 2*i + 1)
-        plt.title("Original")
-        plt.axis('off')
-        plt.imshow(original_images[i].permute(1, 2, 0))
-
-        # Reconstructed image
-        plt.subplot(num_images, 2, 2*i + 2)
-        plt.title("Reconstruction")
-        plt.axis('off')
-        plt.imshow(reconstructed_images[i].permute(1, 2, 0))
-
-    plt.tight_layout()
-    plt.show()
 
 
 def get_all_card_types_and_keywords(json_path):
@@ -327,9 +265,10 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
     max_deck_size = 0; min_deck_size = 101
     decklists = []
     with open(decks_path, "r", encoding="utf-8") as decks:
-        for deck in decks:
+        for line in decks:
+            deck = json.loads(line)
             cards = deck.get("mainboard", [])
-            cards.extenddeck.get("commander_ids", [])
+            cards.extend(deck.get("commander_ids", []))
             decklists.append(cards)
             max_deck_size = max(max_deck_size, len(cards))
             min_deck_size = min(min_deck_size, len(cards))
@@ -350,4 +289,3 @@ if __name__ == "__main__":
     checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
     generate_and_save_dict()
     # save_dataset_to_pt(img_dir, dataset_path)
-    # show_reconstructions(checkpoint_path, img_dir)

@@ -194,36 +194,37 @@ def cpr_step_fn(model, batch, loss_fn, device):
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
 
-    ### TRAINING IMAGE AUTOENCODER
-    # ae_dataset_path = os.path.join(this, "data", "img_dataset.pt")
-    # ae_checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+    """
+    ## TRAINING IMAGE AUTOENCODER
+    ae_dataset_path = os.path.join(this, "data", "img_dataset.pt")
+    ae_checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
 
-    ### TRAINING WITH FIRST FUNCTION I CAME UP WITH
-    # train_and_save_convAE(ae_dataset_path, ae_checkpoint_path)
+    ## TRAINING WITH FIRST FUNCTION I CAME UP WITH
+    train_and_save_convAE(ae_dataset_path, ae_checkpoint_path)
 
-    ### TRAINING WITH GENERALIZED CLASS
-    # NUM_EPOCHS = 10
-    # LEARNING_RATE = 1e-3
-    # DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ## TRAINING WITH GENERALIZED CLASS
+    NUM_EPOCHS = 10
+    LEARNING_RATE = 1e-3
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # ae_model = models.HybridConvAutoencoder().to(DEVICE)
-    # ae_loss_fn = nn.MSELoss()
-    # ae_optimizer = optim.Adam(ae_model.parameters(), lr=LEARNING_RATE)
+    ae_model = models.HybridConvAutoencoder().to(DEVICE)
+    ae_loss_fn = nn.MSELoss()
+    ae_optimizer = optim.Adam(ae_model.parameters(), lr=LEARNING_RATE)
     
-    # ae_full_dataset = torch.load(ae_dataset_path) # Img encoder wants to overfit to available images
-    # data_loader_ae = DataLoader(train_ds_ae, batch_size=8, shuffle=True)
+    ae_full_dataset = torch.load(ae_dataset_path) # Img encoder wants to overfit to available images
+    data_loader_ae = DataLoader(train_ds_ae, batch_size=8, shuffle=True)
 
-    # trainer_ae = Trainer(
-    #     model=ae_model,
-    #     optimizer=ae_optimizer,
-    #     loss_fn=ae_loss_fn,
-    #     train_loader=train_loader_ae,
-    #     val_loader=None,
-    #     checkpoint_path=ae_checkpoint_path,
-    #     device=DEVICE
-    # )
-    # trainer_ae.train(NUM_EPOCHS, train_step_fn=autoencoder_step_fn)
-
+    trainer_ae = Trainer(
+        model=ae_model,
+        optimizer=ae_optimizer,
+        loss_fn=ae_loss_fn,
+        train_loader=train_loader_ae,
+        val_loader=None,
+        checkpoint_path=ae_checkpoint_path,
+        device=DEVICE
+    )
+    trainer_ae.train(NUM_EPOCHS, train_step_fn=autoencoder_step_fn)
+    """
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
@@ -231,16 +232,14 @@ if __name__ == "__main__":
     cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint.pt")
 
     cpr_model = models.PipelineCPR(card_vector_dim=1446, embedding_dim=512).to(DEVICE)
-    cpr_loss_fn = models.TripletLoss(margin=1.0) # Assuming TripletLoss is in your models file
-    # cpr_optimizer = optim.Adam(cpr_model.parameters(), lr=LEARNING_RATE)
+    cpr_loss_fn = models.TripletLoss(margin=1.0) # TODO: decide on the loss function to use here (combined loss for multi-task?)
+    cpr_optimizer = optim.Adam(cpr_model.parameters(), lr=LEARNING_RATE)
 
-    # 3. Create DataLoaders
     # cpr_full_dataset = torch.load(cpr_dataset_path)
     # train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [train_size, val_size])
     # train_loader_cpr = DataLoader(train_ds_cpr, batch_size=32, shuffle=True)
     # val_loader_cpr = DataLoader(val_ds_cpr, batch_size=32, shuffle=False)
 
-    # # 4. Create and run the Trainer
     # trainer_cpr = Trainer(
     #     model=cpr_model,
     #     optimizer=cpr_optimizer,

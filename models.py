@@ -8,6 +8,8 @@ from PIL import Image
 import os
 import random
 from torch.nn.utils.rnn import pad_sequence
+import matplotlib.pyplot as plt
+
 
 # - - - - - - - - - - - - - - - - - Models for card image representation - - - - - - - - - - - - - - - - - 
 
@@ -81,6 +83,67 @@ class CardImageDataset(Dataset):
         img_path = self.image_files[idx]
         img = self.transform(Image.open(img_path).convert('RGB'))
         return img
+
+
+def load_img_encoder(checkpoint_path, device = 'cuda' if torch.cuda.is_available() else 'cpu'):
+    """
+    Loads the weithts of the trained autoencoder and returns an object containing the encoder for inference
+    Args:
+        checkpoint_path (str): Path to the checkpoint containing weights of the trained encoder
+        device (str): Device to use the model on
+    """
+    encoder = HybridConvAutoencoder()
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model_state_dict = checkpoint['model_state_dict']
+    encoder.load_state_dict(model_state_dict)
+    encoder.to(device)
+    encoder.eval()
+    return encoder
+
+
+def show_reconstructions(checkpoint_path, img_dir, device='cuda' if torch.cuda.is_available() else 'cpu', num_images=5):
+    """
+    Shows original card images and reconstrucitons side by side for some cards
+    """
+    
+    model = load_img_encoder(checkpoint_path, device=device)
+    
+    transform = transforms.Compose([
+        transforms.Resize((936, 672)),
+        transforms.ToTensor(),
+    ])
+
+    image_files = [os.path.join(img_dir, f) for f in os.listdir(img_dir)]
+    image_files = image_files[:num_images]
+
+    original_images = []
+    reconstructed_images = []
+    with torch.no_grad():
+        for img_path in image_files:
+            img = Image.open(img_path).convert('RGB')
+            input_tensor = transform(img).unsqueeze(0).to(device)  # (1, 3, 936, 672)
+
+            output = model(input_tensor)
+
+            original_images.append(input_tensor.squeeze(0).cpu())
+            reconstructed_images.append(output.squeeze(0).cpu())
+
+    plt.figure(figsize=(12, 4 * num_images))
+    for i in range(num_images):
+        # Original image
+        plt.subplot(num_images, 2, 2*i + 1)
+        plt.title("Original")
+        plt.axis('off')
+        plt.imshow(original_images[i].permute(1, 2, 0))
+
+        # Reconstructed image
+        plt.subplot(num_images, 2, 2*i + 2)
+        plt.title("Reconstruction")
+        plt.axis('off')
+        plt.imshow(reconstructed_images[i].permute(1, 2, 0))
+
+    plt.tight_layout()
+    plt.show()
 
 
 # - - - - - - - - - - - - - - - - - Models for contextual preference ranking pipeline - - - - - - - - - - - - - - - - - 
@@ -285,3 +348,11 @@ def triplet_collate_fn(batch):
     batched_negatives = torch.stack(negative_cards)
 
     return padded_anchors, batched_positives, batched_negatives
+
+
+
+if __name__ == "__main__":
+    this = os.path.dirname(__file__)
+    img_dir = os.path.join(this, "data", "images")
+    checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+    show_reconstructions(checkpoint_path, img_dir)

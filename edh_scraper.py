@@ -28,6 +28,7 @@ import re
 from collections import defaultdict
 from utils import create_and_save_CPRdataset
 
+
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 2.0):
         self.per_sec = per_sec
@@ -139,7 +140,7 @@ def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set
 
         commanders, commander_ids, main_ids = [], [], []
         deck_color_identity = set()
-        card_list = deck_json.get('cards')
+        card_list = deck.get('cards')
         if not card_list:
             return None
         for c in card_list:
@@ -161,7 +162,7 @@ def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set
 
         if not commanders: return None
 
-        tags_list = deck_json.get('tags')
+        tags_list = deck.get('tags')
         tags = [str(t.get('name')) for t in tags_list if t.get('name')] if tags_list else []
         
         return Deck(deck_id=str(deck_id),
@@ -302,7 +303,7 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
 
             if keep_deck and deck.deck_id not in kept_deck_ids:
                 bucket_output.append(deck)
-                deck_ids.add(deck.deck_id)
+                kept_deck_ids.add(deck.deck_id)
 
         final_decks.extend(bucket_output)
     return final_decks
@@ -381,7 +382,7 @@ if __name__ == "__main__":
     main(
         max_archidekt=100000,
         #max_moxfield=100,
-        per_bucket=1000,
+        per_color_bucket=1000,
         n_duplicates_per_strategy = 10,
         rate_per_sec=4.0
     )
