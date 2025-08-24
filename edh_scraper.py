@@ -25,6 +25,7 @@ import requests
 import random
 from tqdm import tqdm
 import re
+from collections import defaultdict
 
 
 class SimpleRateLimiter:
@@ -178,7 +179,7 @@ def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set
         return None
 
 """ 
-# I can ask for permission of use for non-commercial project https://moxfield.com/help/faq#moxfield-api
+# I can ask for permission of use for non-commercial project: https://moxfield.com/help/faq#moxfield-api
 
 MOXFIELD_BASE = "https://api.moxfield.com/v2"
 
@@ -237,35 +238,88 @@ def color_bucket(ci: List[str]) -> str:
     return "".join(sorted_colors)
 
 
-def diversify(decks: List[Deck], per_bucket: int = 200) -> List[Deck]:
-    """Keep up to per_bucket decks from each color-count bucket, favoring unique commanders."""
-    buckets: Dict[str, List[Deck]] = {}
+PRIORITY_TAGS = [
+    # Power Level / Meta
+    'cedh', 'high power', 'optimized', 'fringe', 'casual', 'budget', 'pauper', 'precon',
+    # Core Strategy
+    'combo', 'control', 'stax', 'aggro', 'midrange', 'voltron', 'aristocrats', 'group hug',
+    # Macro Archetype
+    'spellslinger', 'reanimator', 'lands', 'artifact', 'enchantress', 'superfriends',
+    # Mechanics / Themes
+    'tribal', 'tokens', 'counters', '+1/+1 counters', 'graveyard', 'mill', 'blink',
+    'wheels', 'storm', 'landfall', 'clones', 'theft'
+]
+
+
+def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
+    """
+    Finds all relevant strategic tags from a deck's tag list based on a priority list
+    """
+    normalized_deck_tags = {tag.lower().strip() for tag in deck_tags}
+    found_tags = set()
+    for p_tag in PRIORITY_TAGS:
+        if p_tag in normalized_deck_tags:
+            found_tags.add(p_tag)
+    if not found_tags:
+        return {'untagged'}
+    return found_tags
+
+
+def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Deck]:
+    """
+    Diversification function with two levels of control:
+    1. Keeps a maximum of 'per_bucket' decks for each color identity.
+    2. Within that bucket, keeps up to 'n_duplicates' for each unique (commander, strategic_tag) combination.
+    """
+    buckets: Dict[str, List[Deck]] = defaultdict(list)
     for d in decks:
-        buckets.setdefault(color_bucket(d.color_identity), []).append(d)
+        buckets[color_bucket(d.color_identity)].append(d)
 
-    out: List[Deck] = []
-    for b, arr in buckets.items():
-        seen_cmdr: Set[Tuple[str, ...]] = set()
-        kept = 0
-        for d in arr:
-            key = tuple(sorted(d.commander_ids))
-            if key in seen_cmdr: continue
-            out.append(d)
-            seen_cmdr.add(key)
-            kept += 1
-            if kept >= per_bucket: break
-    return out
+    final_decks: List[Deck] = []
+    
+    for bucket_name, deck_list in sorted(buckets.items()):
+        strategy_counts = defaultdict(int) # Key: (commander_tuple, tag_string), Value: count
+        kept_deck_ids = set()
+        bucket_output = []
 
+        random.shuffle(deck_list)
+        for deck in deck_list:
+            if len(bucket_output) >= per_bucket:
+                break
+            commander_key = tuple(sorted(deck.commander_ids))
+            strategic_tags = extract_strategic_tags(deck.tags)
 
-def main(   card_dict: str,
-            out_jsonl: str,
+            keep_deck = False
+            for tag in strategic_tags:
+                strategy_key = (commander_key, tag)
+                if strategy_counts[strategy_key] < n_duplicates:
+                    keep_deck = True
+                    strategy_counts[strategy_key] += 1
+
+            if keep_deck and deck.deck_id not in kept_deck_ids:
+                bucket_output.append(deck)
+                deck_ids.add(deck.deck_id)
+
+        final_decks.extend(bucket_output)
+    return final_decks
+    
+
+def main(   card_dict: str = None,
+            out_jsonl: str = None,
             max_archidekt: int = 800,
             max_moxfield: int = 800,
             per_bucket: int = 200,
+            n_duplicates_per_strategy: int = 3,
             anchor_sizes: Optional[List[int]] = None,
             rate_per_sec: float = 2.0):
 
-    os.makedirs(os.path.dirname(out_jsonl) or '.', exist_ok=True)
+    dir = os.path.dirname(__file__) or "."
+    if card_dict is None:
+        card_dict = os.path.join(dir, "data", "card_dict.pt")
+    if out_jsonl is None:
+        out_jsonl = os.path.join(dir, "data", "edh_decks.jsonl")
+    
+    os.makedirs(dir, exist_ok=True)
     name_to_id, known_oracle_ids = load_name_maps(card_dict_path)
     if not name_to_id: return
 
@@ -281,33 +335,31 @@ def main(   card_dict: str,
             if d:
                 decks.append(d)
 
-    """ 
-    # Not used in this version
-    print("Fetching Moxfield decks…")
-    fetched = 0; page = 1
-    with tqdm(total=max_moxfield) as pbar:
-        while fetched < max_moxfield:
-            try:
-                results = moxfield_search_commander(page=page, rate=rate)
-                if not results: break
-                for row in results:
-                    if fetched >= max_moxfield: break
-                    pid = row.get('publicId')
-                    if pid:
-                        d = moxfield_fetch_deck(pid, name_to_id, rate)
-                        if d:
-                            decks.append(d)
-                            fetched += 1
-                            pbar.update(1)
-                page += 1
-            except Exception as e:
-                print(f"Warning: Error on Moxfield page {page}: {e}. Skipping page."); page += 1
-    """
+    ### Not used in this version
+    # print("Fetching Moxfield decks…")
+    # fetched = 0; page = 1
+    # with tqdm(total=max_moxfield) as pbar:
+    #     while fetched < max_moxfield:
+    #         try:
+    #             results = moxfield_search_commander(page=page, rate=rate)
+    #             if not results: break
+    #             for row in results:
+    #                 if fetched >= max_moxfield: break
+    #                 pid = row.get('publicId')
+    #                 if pid:
+    #                     d = moxfield_fetch_deck(pid, name_to_id, rate)
+    #                     if d:
+    #                         decks.append(d)
+    #                         fetched += 1
+    #                         pbar.update(1)
+    #             page += 1
+    #         except Exception as e:
+    #             print(f"Warning: Error on Moxfield page {page}: {e}. Skipping page."); page += 1
 
     uniq = {(d.source, d.deck_id): d for d in decks}
     decks = list(uniq.values())
     print(f"\nCollected {len(decks)} unique decks before diversification.")
-    decks = diversify(decks, per_bucket=per_bucket)
+    decks = diversify(decks, per_bucket=per_bucket, n_duplicates= n_duplicates_per_strategy)
     print(f"Kept {len(decks)} decks after diversification.")
 
     with open(out_jsonl, 'w', encoding='utf-8') as f:
@@ -321,16 +373,11 @@ def main(   card_dict: str,
 
 
 if __name__ == "__main__":
-    this = os.path.dirname(__file__) or "."
-    
-    card_dict_path = os.path.join(this, "data", "card_dict.pt")
-    output_path = os.path.join(this, "data", "edh_decks.jsonl")
     
     main(
-        card_dict=card_dict_path,
-        out_jsonl=output_path,
-        max_archidekt=10000,
+        max_archidekt=20000,
         #max_moxfield=100,
         per_bucket=1000,
-        rate_per_sec=5.0
+        n_duplicates_per_strategy = 3,
+        rate_per_sec=4.0
     )
