@@ -19,6 +19,7 @@ import utils
 from sentence_transformers import SentenceTransformer
 from torchvision import transforms
 
+
 def download_data(output_path):
     """
     Downloads the latest version of Scryfall's 'default_cards' bulk data.
