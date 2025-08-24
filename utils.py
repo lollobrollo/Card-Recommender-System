@@ -313,6 +313,28 @@ def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_
     return text
 
 
+def create_and_save_dataset(decks_path: str, output_path: str, card_feature_map_path: str):
+    """
+    Creastes and saves a dataset for the training of the PipelineCPR model
+    Extracts required informations from the decks scraped from the web (archidekt)
+    """
+    max_deck_size = 0; min_deck_size = 101
+    decklists = []
+    with open(decks_path, "r", encoding="utf-8") as decks:
+        for deck in decks:
+            cards = deck.get("mainboard", [])
+            cards.extenddeck.get("commander_ids", [])
+            decklists.append(cards)
+            max_deck_size = max(max_deck_size, len(cards))
+            min_deck_size = min(min_deck_size, len(cards))
+
+    anchor_size_range = (min_deck_size, max_deck_size)
+    card_feature_map = torch.load(card_feature_map_path)
+
+    dataset = TripletEDHDataset(decklists, card_feature_map, anchor_size_range)
+    torch.save(dataset, output_path)
+
+
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
     img_dir = os.path.join(this, "data", "images")

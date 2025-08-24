@@ -179,7 +179,7 @@ def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set
         return None
 
 """ 
-# I can ask for permission of use for non-commercial project: https://moxfield.com/help/faq#moxfield-api
+# I can ask for permission of use for a non-commercial project: https://moxfield.com/help/faq#moxfield-api
 
 MOXFIELD_BASE = "https://api.moxfield.com/v2"
 
@@ -379,9 +379,9 @@ def main(   card_dict: str = None,
 if __name__ == "__main__":
     
     main(
-        max_archidekt=20000,
+        max_archidekt=100000,
         #max_moxfield=100,
         per_bucket=1000,
-        n_duplicates_per_strategy = 3,
+        n_duplicates_per_strategy = 10,
         rate_per_sec=4.0
     )

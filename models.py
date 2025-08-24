@@ -138,6 +138,7 @@ class DeckEncoder_v1(nn.Module):
 class DeckEncoder_v2(nn.Module):
     """
     Treats the deck as an image -> uses Conv2d to extract features
+    (probably should compress more on y axis (representation length) while pooling)
     """
     def __init__(self, output_dim=512):
         super().__init__()
@@ -217,19 +218,20 @@ class PipelineCPR(nn.Module):
 class TripletEDHDataset(Dataset):
     """
     PyTorch Dataset that generates training triplets on the fly for the PipelineCPR
+    Has to be created with 'create_and_save_dataset' function in utils.py
     """
-    def __init__(self, decklists, card_feature_map, anchor_size_range=(50, 95)):
+    def __init__(self, decklists, card_feature_map, anchor_size_range=(30, 90)):
         """
         Args:
-            decklists (list): A list of lists containing the oracle_ids of the 100 cards in a deck
+            decklists (list): A list of lists containing the oracle_ids of the cards in a deck (basic lands excluded)
             card_feature_map (dict): A dictionary mapping an oracle_id to its pre-computed feature tensor
-            anchor_size_range (tuple): A (min, max) tuple for the number of cards to randomly select for the anchor deck.
+            anchor_size_range (tuple): A (min, max) tuple for the number of cards to randomly select for the anchor deck
         """
-        # Filter out any decks that are too small to sample from
-        self.decklists = [deck for deck in decklists if len(deck) > 1]
+        # Filter out any decks that are too small to sample from (& account for anchor size limits)
+        self.decklists = [deck for deck in decklists if len(deck) > 30]
         self.card_feature_map = card_feature_map
-        self.all_card_ids = list(card_feature_map.keys()) #used for negative sampling
-        self.anchor_size_range = anchor_size_range
+        self.all_card_ids = list(card_feature_map.keys()) # used for negative sampling
+        self.anchor_size_range = anchor_size_range # since I'm taking out basic lands, min_anchor_size can be pretty low
 
     def __len__(self):
         return len(self.decklists)
@@ -251,7 +253,7 @@ class TripletEDHDataset(Dataset):
         holdout_ids = deck[anchor_size:]
         positive_card_id = random.choice(holdout_ids)
 
-        # Find a Negative Card: a random card from the card pool not present in the original decklist.
+        # Find a Negative Card: a random card from the card pool not present in the original decklist
         negative_card_id = None
         while negative_card_id is None or negative_card_id in deck_set:
             negative_card_id = random.choice(self.all_card_ids)
@@ -267,7 +269,7 @@ class TripletEDHDataset(Dataset):
 def triplet_collate_fn(batch):
     """
     A custom collate function to handle variable-length anchor decks in a batch:
-    it pads the anchor decks to the same length and stacks the cards.
+    it pads the anchor decks to the same length and stacks the cards
     """
     # Separate the components of the batch
     anchor_decks = [item[0] for item in batch]
