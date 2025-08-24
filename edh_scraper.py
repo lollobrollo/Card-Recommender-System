@@ -91,71 +91,90 @@ class Deck:
     def to_json(self):
         return json.dumps(asdict(self), ensure_ascii=False)
 
+# Useful info for using the api:
+# https://www.npmjs.com/package/archidekt (outdated)
+# https://archidekt.com/forum/thread/10531812
+# https://github.com/linkian209/pyrchidekt
 
-ARCHIDEKT_BASE = "https://archidekt.com/api"
+ARCHIDEKT_BASE = "https://archidekt.com/api/decks"
 
 
 def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
     """Yield Commander deck search results (metadata pages)."""
     page = 1; fetched = 0
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
+    url = f"{ARCHIDEKT_BASE}/v3/"
     while fetched < limit:
         rate.wait()
-        url = f"{ARCHIDEKT_BASE}/decks/v3/"
         params = {
+            "size": 100, # Only completed decks
             "orderBy": "-createdAt",
-            "formats": [3], # numerical id for Commander
+            "deckFormat": 3,
             "pageSize": 50,
             "page" : page
         }
         try:
             data = http_get_json(url, params=params, headers=headers)
             results = data.get('results', [])
-            if not results: break
+            if not results:
+                print(f"\nCould not get results for page {page}")
+                break
             for item in results:
                 yield item
                 fetched += 1
                 if fetched >= limit: break
             page += 1
         except Exception as e:
-            print(f"Warning: Archidekt search failed on page {page}: {e}. Stopping Archidekt search.")
+            print(f"\nWarning: Archidekt search failed on page {page}: {e}. Stopping Archidekt search.")
             break
 
 
-def archidekt_fetch_deck(deck_id: int, name_to_id: Dict[str, str], known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
+def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
-    url = f"{ARCHIDEKT_BASE}/decks/v3/{deck_id}/"
     rate.wait()
-
     try:
-        data = http_get_json(url, headers=headers)
+        url = f"{ARCHIDEKT_BASE}/{deck_id}/"
+        deck = http_get_json(url, headers=headers)
+
         commanders, commander_ids, main_ids = [], [], []
-        for c in data.get('cards', []):
-            is_commander = 'commander' in (c.get('category') or "").lower()
+        deck_color_identity = set()
+        card_list = deck_json.get('cards')
+        if not card_list:
+            return None
+        for c in card_list:
+            is_commander = 'Commander' in c.get('categories', [])
             qty = int(c.get('quantity') or 1)
             card_info = c.get('card', {}).get('oracleCard', {})
-            name = card_info.get('name'); oid = card_info.get('scryfallOracleId')
+            name = card_info.get('name')
+            oid = card_info.get('uid')
+            if not (name and oid and oid in known_ids): continue # Ignore cards for which I have no representation (LANDS ARE OMITTED)
 
-            if not (name and oid and oid in known_ids): continue # Ignore cards for which I have no representation
+            card_colors = card_info.get('colorIdentity', [])
+            deck_color_identity.update(card_colors)
 
             if is_commander:
-                commanders.append(name); commander_ids.append(oid)
+                commanders.append(name)
+                commander_ids.append(oid)
             else:
                 main_ids.extend([oid] * qty)
 
-        if not commanders or (len(main_ids) + len(commander_ids)) != 100: return None
+        if not commanders: return None
+
+        tags_list = deck_json.get('tags')
+        tags = [str(t.get('name')) for t in tags_list if t.get('name')] if tags_list else []
         
         return Deck(deck_id=str(deck_id),
                     source='archidekt',
-                    name=data.get('name'),
+                    name=deck.get('name'),
                     commanders=commanders,
                     commander_ids=commander_ids,
-                    color_identity=list(data.get('colors', {}).keys()),
-                    tags=[str(t.get('name')) for t in data.get('tags', []) if t.get('name')],
-                    power=None, budget=data.get('prices', {}).get('usd'),
+                    color_identity=sorted(list(deck_color_identity)),
+                    tags=tags,
+                    power=None, budget=deck.get('prices', {}).get('usd'),
                     size=len(main_ids),
                     mainboard_ids=main_ids)
-    except Exception:
+    except Exception as e:
+        print(f"\nError while fetching for deck {deck_id} : {e}")
         return None
 
 """ 
@@ -238,17 +257,6 @@ def diversify(decks: List[Deck], per_bucket: int = 200) -> List[Deck]:
     return out
 
 
-def make_anchor_slices(deck: Deck, sizes: List[int]) -> Dict[int, List[str]]:
-    """ Create different-size anchors with randomized card selection """
-    ids = deck.mainboard_ids.copy()
-    random.shuffle(ids)  # randomize card order
-    slices = {}
-    for s in sorted(set(sizes)):
-        s_eff = min(s, deck.size)
-        slices[str(s_eff)] = ids[:s_eff]
-    return slices
-
-
 def main(   card_dict: str,
             out_jsonl: str,
             max_archidekt: int = 800,
@@ -266,14 +274,15 @@ def main(   card_dict: str,
     decks = []
 
     print("Fetching Archidekt decks…")
-    for meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
-        did = meta.get('id')
+    for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
+        did = deck_meta.get("id")
         if did:
-            d = archidekt_fetch_deck(int(did), name_to_id, known_oracle_ids, rate)
-            if d: decks.append(d)
+            d = archidekt_fetch_deck(did, name_to_id, known_oracle_ids, rate)
+            if d:
+                decks.append(d)
 
     """ 
-    # Not used for now
+    # Not used in this version
     print("Fetching Moxfield decks…")
     fetched = 0; page = 1
     with tqdm(total=max_moxfield) as pbar:
@@ -304,8 +313,8 @@ def main(   card_dict: str,
     with open(out_jsonl, 'w', encoding='utf-8') as f:
         for d in tqdm(decks, desc="Saving decks to JSONL"):
             row = asdict(d)
-            if anchor_sizes:
-                row['anchors'] = make_anchor_slices(d, anchor_sizes)
+            # if anchor_sizes:
+            #     row['anchors'] = make_anchor_slices(d, anchor_sizes)
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
     print(f"Wrote {len(decks)} decks into {out_jsonl}")
 
@@ -320,9 +329,8 @@ if __name__ == "__main__":
     main(
         card_dict=card_dict_path,
         out_jsonl=output_path,
-        max_archidekt=50,
+        max_archidekt=10000,
         #max_moxfield=100,
-        per_bucket=500,
-        anchor_sizes=[50, 75, 90],
-        rate_per_sec=4.0
+        per_bucket=1000,
+        rate_per_sec=5.0
     )
