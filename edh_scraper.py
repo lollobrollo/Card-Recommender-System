@@ -296,7 +296,7 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
                 if tag != "untagged" and strategy_counts[strategy_key] < n_duplicates:
                     keep_deck = True
                     strategy_counts[strategy_key] += 1
-                if tag == "untagged" and strategy_counts[strategy_key] < n_duplicates*4:
+                if tag == "untagged" and strategy_counts["untagged"] < n_duplicates*4:
                     keep_deck = True
                     strategy_counts[strategy_key] += 1
 
