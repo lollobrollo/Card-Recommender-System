@@ -26,7 +26,7 @@ import random
 from tqdm import tqdm
 import re
 from collections import defaultdict
-
+from utils import create_and_save_CPRdataset
 
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 2.0):
@@ -312,7 +312,7 @@ def main(   card_dict: str = None,
             out_jsonl: str = None,
             max_archidekt: int = 800,
             max_moxfield: int = 800,
-            per_bucket: int = 200,
+            per_color_bucket: int = 200,
             n_duplicates_per_strategy: int = 3,
             anchor_sizes: Optional[List[int]] = None,
             rate_per_sec: float = 2.0):
@@ -363,7 +363,7 @@ def main(   card_dict: str = None,
     uniq = {(d.source, d.deck_id): d for d in decks}
     decks = list(uniq.values())
     print(f"\nCollected {len(decks)} unique decks before diversification.")
-    decks = diversify(decks, per_bucket=per_bucket, n_duplicates= n_duplicates_per_strategy)
+    decks = diversify(decks, per_bucket=per_color_bucket, n_duplicates= n_duplicates_per_strategy)
     print(f"Kept {len(decks)} decks after diversification.")
 
     with open(out_jsonl, 'w', encoding='utf-8') as f:
@@ -385,3 +385,10 @@ if __name__ == "__main__":
         n_duplicates_per_strategy = 10,
         rate_per_sec=4.0
     )
+
+    this = os.path.dirpath(__file__)
+    decks_path = os.path.join(this, "data", "cpr_dataset.pt")
+    output_path = os.path.join(this, "data", "edh_decks.jsonl")
+    card_feature_map_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
+    create_and_save_CPRdataset(decks_path, output_path, card_feature_map_path)
+  

@@ -218,7 +218,7 @@ class PipelineCPR(nn.Module):
 class TripletEDHDataset(Dataset):
     """
     PyTorch Dataset that generates training triplets on the fly for the PipelineCPR
-    Has to be created with 'create_and_save_dataset' function in utils.py
+    Has to be created with 'create_and_save_CPRdataset' function in utils.py
     """
     def __init__(self, decklists, card_feature_map, anchor_size_range=(30, 90)):
         """
