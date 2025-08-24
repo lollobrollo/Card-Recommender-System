@@ -270,6 +270,7 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
     Diversification function with two levels of control:
     1. Keeps a maximum of 'per_bucket' decks for each color identity.
     2. Within that bucket, keeps up to 'n_duplicates' for each unique (commander, strategic_tag) combination.
+    Most decks are untagged, so the limit for them is more lenient.
     """
     buckets: Dict[str, List[Deck]] = defaultdict(list)
     for d in decks:
@@ -293,6 +294,9 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
             for tag in strategic_tags:
                 strategy_key = (commander_key, tag)
                 if strategy_counts[strategy_key] < n_duplicates:
+                    keep_deck = True
+                    strategy_counts[strategy_key] += 1
+                if strategy_key == "untagged" and strategy_counts[strategy_key] < n_duplicates*4:
                     keep_deck = True
                     strategy_counts[strategy_key] += 1
 
