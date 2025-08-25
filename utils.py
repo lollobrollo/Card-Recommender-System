@@ -251,36 +251,6 @@ def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_
     return text
 
 
-def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str):
-    """
-    Creastes and saves a dataset for the training of the PipelineCPR model
-    Extracts required informations from the decks scraped from the web (archidekt)
-    """
-    try:
-        card_feature_map = torch.load(card_feature_map_path)
-    except Exception as e:
-        print(f"Couldn't load feature map: {e}")
-
-    try:
-    max_deck_size = 0; min_deck_size = 101
-    decklists = []
-    with open(decks_path, "r", encoding="utf-8") as decks:
-        for line in decks:
-            deck = json.loads(line)
-            cards = deck.get("mainboard", [])
-            cards.extend(deck.get("commander_ids", []))
-            decklists.append(cards)
-            max_deck_size = max(max_deck_size, len(cards))
-            min_deck_size = min(min_deck_size, len(cards))
-
-    anchor_size_range = (min_deck_size, max_deck_size)
-
-    dataset = TripletEDHDataset(decklists, card_feature_map, anchor_size_range)
-    torch.save(dataset, output_path)
-    except Exception as e:
-        print(f"Couldn't save initialised dataset: {e}")
-    print(f"successfully saved dataset to {output_path}")
-
 
 if __name__ == "__main__":
     this = os.path.dirname(__file__)

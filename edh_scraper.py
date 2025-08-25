@@ -1,20 +1,4 @@
-"""
-EDH / Commander decklist harvesting for triplet-loss training.
-
-Sources used (public, API-first to avoid scraping HTML / ToS issues):
-  - Archidekt public API
-  - Moxfield public API (undocumented but commonly used)
-
-What this script does
----------------------
-1) Fetches public Commander decks from Archidekt and Moxfield.
-2) Normalizes them into a common structure with commander(s), colors, tags, and *oracle_id* lists.
-3) Ensures variety (mono → five-color, different commanders and tags) and dedupes.
-4) Optionally creates multiple "anchor" slices of different deck sizes (e.g., 10/25/50/99 cards) to support triplet sampling downstream.
-5) Saves results to JSONL for easy incremental appends.
-"""
-
-from torch import load
+import torch
 import argparse
 import json
 import os
@@ -26,7 +10,7 @@ import random
 from tqdm import tqdm
 import re
 from collections import defaultdict
-from utils import create_and_save_CPRdataset
+from models import TripletEDHDataset
 
 
 class SimpleRateLimiter:
@@ -70,7 +54,7 @@ def load_name_maps(card_dict_path: str):
     if not os.path.exists(card_dict_path):
         print(f"Card dictionary not found at '{card_dict_path}'"); return None, None
     
-    loaded_dict = load(card_dict_path)
+    loaded_dict = torch.load(card_dict_path)
     name_to_id_map = {normalize_card_name(name):oid for name,oid in loaded_dict.items()}
     known_oracle_ids = set(name_to_id_map.values())
     return name_to_id_map, known_oracle_ids
@@ -176,7 +160,7 @@ def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set
                     size=len(main_ids),
                     mainboard_ids=main_ids)
     except Exception as e:
-        print(f"\nError while fetching for deck {deck_id} : {e}")
+        # print(f"\nError while fetching for deck {deck_id} : {e}")
         return None
 
 """ 
@@ -239,17 +223,30 @@ def color_bucket(ci: List[str]) -> str:
     return "".join(sorted_colors)
 
 
-PRIORITY_TAGS = [
-    # Power Level / Meta
-    'cedh', 'high power', 'optimized', 'fringe', 'casual', 'budget', 'pauper', 'precon',
-    # Core Strategy
-    'combo', 'control', 'stax', 'aggro', 'midrange', 'voltron', 'aristocrats', 'group hug',
-    # Macro Archetype
-    'spellslinger', 'reanimator', 'lands', 'artifact', 'enchantress', 'superfriends',
-    # Mechanics / Themes
-    'tribal', 'tokens', 'counters', '+1/+1 counters', 'graveyard', 'mill', 'blink',
-    'wheels', 'storm', 'landfall', 'clones', 'theft'
+ALL_TAGS = [
+    "+1+1 counters", "-1-1 counters", "adventures", "aggro", "alternate wincon", "angels", "aristocrats", "artifact", "assassins", "bears", "beasts", "big mana", "birds",
+    "blink", "bounce", "budget", "burn", "cantips", "cats", "cascade", "casual", "cedh", "changeling", "chaos", "charge counter", "cheerios", "clerics", "clones", "clues",
+    "coin flip", "combo", "commander matter", "connive", "control", "convoke", "counters", "counterspells", "crabs", "craft", "creatureless", "creatures", "crime", "curses",
+    "cycling", "day/night", "deathtouch", "defender", "delirium", "delve", "demons", "descend", "desert", "devils", "devotion", "die roll", "dinosaur", "discard", "discover",
+    "dogs", "donate", "dragons", "dragon's approach", "draw", "dredge", "druids", "dungeon", "dwarves", "eggs", "eldrazi", "elementals", "elves", "enchantments", "enchantress",
+    "energy", "enrage", "equipment", "etb effect", "exalted", "exile", "experience counters", "exploit", "explore", "extra combats", "extra turns", "extra upkeep", "face-down",
+    "faeries", "fight", "flash", "flashback", "flavor", "fling", "flying", "food", "forced combat", "foretell", "freerunning", "frogs", "fungi", "gates", "giants", "glass cannon",
+    "gnomes", "goats", "goblins", "gods", "golems", "good stuff", "graveyard", "group hug", "group slug", "gyruda", "halflings", "hand size", "hare apparent", "haste", "hatebears",
+    "hellbent", "heroic", "hidden commander", "hippos", "historic", "horrors", "horses", "humans", "hydras", "illusions", "improvise", "impulse draw", "indestructible", "infect",
+    "insects", "jank", "jegantha", "kaheera", "keruga", "keywords", "kicker", "kithkin", "knights", "land animation", "land destruction", "landfall", "lands", "legends", "lhurgoyfs",
+    "lifedrain", "lifegain", "limited", "lizards", "madness", "mercenaries", "merfolk", "mice", "midrange", "mill", "minotaurs", "modular", "monarch", "monkeys", "monks",
+    "morph", "mounts", "multicolor matters", "mutants", "mutate", "myr", "myriad", "nightmares", "ninjas", "ninjutsu", "offspring", "oil counters", "old school", "oozes",
+    "otter", "outlaws", "paradox", "party", "persistent petitioners", "phasing", "phoenixes", "phyrexians", "pillow fort", "pingers", "pirates", "planeswalkers", "plants", "plot",
+    "pod", "politics", "polymorph", "populate", "power", "praetors", "primal surge", "prison", "proliferate", "prowess", "rabbits", "raccoons", "rad counters", "ramp", "rat colony",
+    "rats", "reach", "reanimator", "rebels", "robots", "rock", "rogues", "rooms", "rotated standard", "rule zero", "saboteur", "sacrifice", "sagas", "salty", "samurai", "saprolings",
+    "satyr", "scarecrows", "scry", "sea creatures", "self-damage", "self-discard", "self-mill", "shades", "shadowborn apostles", "shamans", "shapeshifters", "sharks", "shrines",
+    "skeletons", "slime against humanity", "slivers", "snakes", "sneak attack", "snow", "soldiers", "spacecraft", "specters", "speed", "spell copy", "spellslinger", "sphinxes",
+    "spiders", "spirits", "squirrels", "stax", "stickers", "stompy", "storm", "sunforger", "surveil", "suspend", "tap/untap", "tempest hawk", "templar knights", "tempo", "theft",
+    "thopters", "time counters", "time lords", "tiny leaders", "tokens", "toolbox", "topdecks", "toughness", "transform", "trasure", "treefolk", "turbo fog", "turtles", "tyranids",
+    "unblockable", "unicorns", "unmodified precon", "upgraded precon", "vampires", "vanilla", "vehicles", "voltron", "voting", "warriors", "weenies", "werewolves", "wheels",
+    "wizards", "wolves", "wraiths", "wurms", "x spells", "zirda", "zombies", "zoo"
 ]
+
 
 
 def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
@@ -258,7 +255,7 @@ def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
     """
     normalized_deck_tags = {tag.lower().strip() for tag in deck_tags}
     found_tags = set()
-    for p_tag in PRIORITY_TAGS:
+    for p_tag in ALL_TAGS:
         if p_tag in normalized_deck_tags:
             found_tags.add(p_tag)
     if not found_tags:
@@ -274,8 +271,10 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
     Most decks are untagged, so the limit for them is more lenient.
     """
     buckets: Dict[str, List[Deck]] = defaultdict(list)
+
     for d in decks:
         buckets[color_bucket(d.color_identity)].append(d)
+    excluded_report = {k: 0 for k in buckets.keys()} # Used to save bucket results on file, for later checks 
 
     final_decks: List[Deck] = []
     
@@ -283,6 +282,7 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
         strategy_counts = defaultdict(int) # Key: (commander_tuple, tag_string), Value: count
         kept_deck_ids = set()
         bucket_output = []
+        excluded_report[bucket_name] = max(0, len(bucket_output) - per_bucket)
 
         random.shuffle(deck_list)
         for deck in deck_list:
@@ -306,6 +306,10 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
                 kept_deck_ids.add(deck.deck_id)
 
         final_decks.extend(bucket_output)
+    excluded_report_sorted = dict(sorted(excluded_report.items(), key = lambda item: item[1], reverse=True))
+    report_path = os.path.join(os.path.dirname(__file__), "data", "buckets_exclusion_report.pt")
+    torch.save(excluded_report_sorted, report_path)
+
     return final_decks
     
 
@@ -325,13 +329,13 @@ def main(   card_dict: str = None,
         out_jsonl = os.path.join(dir, "data", "edh_decks.jsonl")
     
     os.makedirs(dir, exist_ok=True)
-    name_to_id, known_oracle_ids = load_name_maps(card_dict_path)
+    name_to_id, known_oracle_ids = load_name_maps(card_dict)
     if not name_to_id: return
 
     rate = SimpleRateLimiter(per_sec=rate_per_sec)
 
     decks = []
-
+    print(f"Trying to fetch {max_archidekt} decks.")
     print("Fetching Archidekt decks…")
     for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
         did = deck_meta.get("id")
@@ -376,20 +380,49 @@ def main(   card_dict: str = None,
     print(f"Wrote {len(decks)} decks into {out_jsonl}")
 
 
+def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str):
+    """
+    Creastes and saves a dataset for the training of the PipelineCPR model
+    Extracts required informations from the decks scraped from the web (archidekt)
+    """
+    try:
+        card_feature_map = torch.load(card_feature_map_path)
+    except Exception as e:
+        print(f"Couldn't load feature map: {e}")
+
+    try:
+        max_deck_size = 0; min_deck_size = 101
+        decklists = []
+        with open(decks_path, "r", encoding="utf-8") as decks:
+            for line in decks:
+                deck = json.loads(line)
+                cards = deck.get("mainboard_ids", [])
+                cards.extend(deck.get("commander_ids", []))
+                decklists.append(cards)
+                max_deck_size = max(max_deck_size, len(cards))
+                min_deck_size = min(min_deck_size, len(cards))
+        anchor_size_range = (min_deck_size, max_deck_size)
+        
+        dataset = TripletEDHDataset(decklists, card_feature_map, anchor_size_range)
+        torch.save(dataset, output_path)
+    except Exception as e:
+        print(f"Couldn't save initialised dataset: {e}")
+    print(f"successfully saved {len(decklists)} deckists into dataset to {output_path}")
+
+
 
 if __name__ == "__main__":
-    
-    main(
-        max_archidekt=100000,
-        #max_moxfield=100,
-        per_color_bucket=1000,
-        n_duplicates_per_strategy = 10,
-        rate_per_sec=4.0
-    )
 
-    this = os.path.dirpath(__file__)
-    decks_path = os.path.join(this, "data", "cpr_dataset.pt")
-    output_path = os.path.join(this, "data", "edh_decks.jsonl")
+    # main(
+    #     max_archidekt=10000,
+    #     #max_moxfield=100,
+    #     per_color_bucket=1000,
+    #     n_duplicates_per_strategy = 5,
+    #     rate_per_sec=5.0
+    # )
+
+    this = os.path.dirname(__file__)
+    decks_path = os.path.join(this, "data", "edh_decks.jsonl")
+    dataset_path = os.path.join(this, "data", "cpr_dataset.pt")
     card_feature_map_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
-    create_and_save_CPRdataset(decks_path, output_path, card_feature_map_path)
-  
+    create_and_save_CPRdataset(decks_path, dataset_path, card_feature_map_path)

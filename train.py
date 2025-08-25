@@ -169,7 +169,6 @@ class Trainer:
                 # Save the model only if validation loss improves
                 if val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
-                    print(f"New best validation loss! Saving model...")
                     self._save_checkpoint(epoch, val_loss)
             else:
                 # If no validation, save after every epoch
@@ -228,25 +227,30 @@ if __name__ == "__main__":
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
+    NUM_EPOCHS = 50
+    LEARNING_RATE = 0.0001 # TODO: could use a scheduler?
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     cpr_dataset_path = os.path.join(this, "data", "cpr_dataset.pt")
     cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint.pt")
 
-    cpr_model = models.PipelineCPR(card_vector_dim=1446, embedding_dim=512).to(DEVICE)
-    cpr_loss_fn = models.TripletLoss(margin=1.0) # TODO: decide on the loss function to use here (combined loss for multi-task?)
+    cpr_model = models.PipelineCPR(card_dim=1446).to(DEVICE)
+    cpr_loss_fn = nn.TripletMarginLoss(margin=1.0) # TODO: combined loss for multi-task?
     cpr_optimizer = optim.Adam(cpr_model.parameters(), lr=LEARNING_RATE)
 
-    # cpr_full_dataset = torch.load(cpr_dataset_path)
-    # train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [train_size, val_size])
-    # train_loader_cpr = DataLoader(train_ds_cpr, batch_size=32, shuffle=True)
-    # val_loader_cpr = DataLoader(val_ds_cpr, batch_size=32, shuffle=False)
+    cpr_full_dataset = torch.load(cpr_dataset_path, weights_only = False)
+    train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [0.8, 0.2])
+    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=32, drop_last=True, collate_fn=models.triplet_collate_fn, shuffle=True)
+    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=32, drop_last=True, collate_fn=models.triplet_collate_fn, shuffle=False)
 
-    # trainer_cpr = Trainer(
-    #     model=cpr_model,
-    #     optimizer=cpr_optimizer,
-    #     loss_fn=cpr_loss_fn,
-    #     train_loader=train_loader_cpr,
-    #     val_loader=val_loader_cpr,
-    #     checkpoint_path=cpr_checkpoint_path,
-    #     device=DEVICE
-    # )
-    # trainer_cpr.train(NUM_EPOCHS, train_step_fn=cpr_step_fn)
+    trainer_cpr = Trainer(
+        model=cpr_model,
+        optimizer=cpr_optimizer,
+        loss_fn=cpr_loss_fn,
+        train_loader=train_loader_cpr,
+        val_loader=val_loader_cpr,
+        checkpoint_path=cpr_checkpoint_path,
+        device=DEVICE
+    )
+
+    trainer_cpr.train(NUM_EPOCHS, step_fn=cpr_step_fn)

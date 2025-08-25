@@ -11,7 +11,7 @@ from torch.nn.utils.rnn import pad_sequence
 import matplotlib.pyplot as plt
 
 
-# - - - - - - - - - - - - - - - - - Models for card image representation - - - - - - - - - - - - - - - - - 
+# - - - - - - - - - - - - - - - - - Model for card image representation - - - - - - - - - - - - - - - - - 
 
 class HybridConvAutoencoder(nn.Module):
     def __init__(self, latent_dim=1024):
@@ -157,7 +157,7 @@ class CardEncoder_v1(nn.Module):
             nn.Linear(card_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
             nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
             nn.Linear(hidden_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ELU(True), nn.Dropout(p_drop),
-            nn.Linear(hidden_dim, output_dim)
+            nn.Linear(hidden_dim, out_dim)
         )
 
     def forward(self, x):
@@ -203,7 +203,7 @@ class DeckEncoder_v2(nn.Module):
     Treats the deck as an image -> uses Conv2d to extract features
     (probably should compress more on y axis (representation length) while pooling)
     """
-    def __init__(self, output_dim=512):
+    def __init__(self, out_dim=512):
         super().__init__()
 
         self.conv_layers = nn.Sequential(
@@ -224,7 +224,7 @@ class DeckEncoder_v2(nn.Module):
         self.out = nn.Sequential(
             nn.AdaptiveMaxPool2d(output_size=1),
             nn.Flatten(start_dim=1),
-            nn.Linear(16, output_dim)
+            nn.Linear(16, out_dim)
         )
 
     def forward(self, x):
@@ -257,7 +257,7 @@ class SiameseHead(nn.Module):
 
 
 class PipelineCPR(nn.Module):
-    def __init__(self, card_dim, card_hidden_dim, embed_dim=512, out_dim=2):
+    def __init__(self, card_dim=1440, card_hidden_dim=1024, embed_dim=512, out_dim=2):
         super().__init__()
 
         self.card_encoder = CardEncoder_v1(card_dim=card_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)
