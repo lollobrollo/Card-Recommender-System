@@ -115,9 +115,9 @@ def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
             break
 
 
-def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
+def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimiter = None) -> Optional[Deck]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
-    if not rate:
+    if rate == None:
         rate = SimpleRateLimiter()
     rate.wait()
     try:
