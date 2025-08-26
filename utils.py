@@ -251,6 +251,38 @@ def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_
     return text
 
 
+def parse_mana_cost(mana_cost_str: str) -> dict:
+    if not mana_cost_str:
+        return {'cmc': 0, 'colors': [], 'generic': 0, 'x_cost': False}
+    symbols = re.findall(r"\{([^}]+)\}", mana_cost_str)
+    cmc = 0
+    colors = []
+    generic_mana = 0
+    has_x_cost = False
+    for symbol in symbols:
+        if symbol.isdigit():
+            cost = int(symbol)
+            cmc += cost
+            generic_mana += cost
+        elif symbol.upper() == 'X':
+            has_x_cost = True
+        elif '/' in symbol: # Hybrid/phyrexian
+            cmc += 1
+            parts = symbol.upper().split('/')
+            for part in parts:
+                if part in "WUBRG":
+                    colors.append(part)
+        elif symbol.upper() in "WUBRG":
+            cmc += 1
+            colors.append(symbol.upper())
+    return {
+        'cmc': cmc,
+        'colors': sorted(list(set(colors))),
+        'generic': generic_mana,
+        'x_cost': has_x_cost
+    }
+
+
 
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
