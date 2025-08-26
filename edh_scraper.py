@@ -414,10 +414,10 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
 if __name__ == "__main__":
 
     # main(
-    #     max_archidekt=10000,
+    #     max_archidekt=70000,
     #     #max_moxfield=100,
-    #     per_color_bucket=1000,
-    #     n_duplicates_per_strategy = 5,
+    #     per_color_bucket=2000,
+    #     n_duplicates_per_strategy = 4,
     #     rate_per_sec=5.0
     # )
 

@@ -227,21 +227,21 @@ if __name__ == "__main__":
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
-    NUM_EPOCHS = 50
+    NUM_EPOCHS = 10
     LEARNING_RATE = 0.0001 # TODO: could use a scheduler?
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     cpr_dataset_path = os.path.join(this, "data", "cpr_dataset.pt")
-    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint.pt")
+    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_3d.pt")
 
-    cpr_model = models.PipelineCPR(card_dim=1446).to(DEVICE)
+    cpr_model = models.PipelineCPR(card_dim=1446, out_dim=3).to(DEVICE)
     cpr_loss_fn = nn.TripletMarginLoss(margin=1.0) # TODO: combined loss for multi-task?
     cpr_optimizer = optim.Adam(cpr_model.parameters(), lr=LEARNING_RATE)
 
     cpr_full_dataset = torch.load(cpr_dataset_path, weights_only = False)
     train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [0.8, 0.2])
-    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=32, drop_last=True, collate_fn=models.triplet_collate_fn, shuffle=True)
-    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=32, drop_last=True, collate_fn=models.triplet_collate_fn, shuffle=False)
+    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=64, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=True)
+    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=64, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=False)
 
     trainer_cpr = Trainer(
         model=cpr_model,
