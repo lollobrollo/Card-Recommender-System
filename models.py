@@ -257,7 +257,7 @@ class SiameseHead(nn.Module):
 
 
 class PipelineCPR(nn.Module):
-    def __init__(self, card_dim=1446, card_hidden_dim=1024, embed_dim=512, out_dim=2):
+    def __init__(self, card_dim=1446, card_hidden_dim=1024, embed_dim=512, out_dim=3):
         super().__init__()
 
         self.card_encoder = CardEncoder_v1(card_dim=card_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)

@@ -14,7 +14,7 @@ from models import TripletEDHDataset
 
 
 class SimpleRateLimiter:
-    def __init__(self, per_sec: float = 2.0):
+    def __init__(self, per_sec: float = 4.0):
         self.per_sec = per_sec
         self._last_t = 0.0
 
@@ -115,8 +115,10 @@ def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
             break
 
 
-def archidekt_fetch_deck(deck_id:int, name_to_id: Dict[str, str], known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
+def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimiter) -> Optional[Deck]:
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
+    if not rate:
+        rate = SimpleRateLimiter()
     rate.wait()
     try:
         url = f"{ARCHIDEKT_BASE}/{deck_id}/"
@@ -248,7 +250,6 @@ ALL_TAGS = [
 ]
 
 
-
 def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
     """
     Finds all relevant strategic tags from a deck's tag list based on a priority list
@@ -340,7 +341,7 @@ def main(   card_dict: str = None,
     for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
         did = deck_meta.get("id")
         if did:
-            d = archidekt_fetch_deck(did, name_to_id, known_oracle_ids, rate)
+            d = archidekt_fetch_deck(did, known_oracle_ids, rate)
             if d:
                 decks.append(d)
 
