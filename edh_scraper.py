@@ -130,6 +130,9 @@ def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimit
         if not card_list:
             return None
         for c in card_list:
+            categories = card_entry.get('categories', '').lower()
+            if 'sideboard' in categories or 'maybeboard' in categories: continue
+
             is_commander = 'Commander' in c.get('categories', [])
             qty = int(c.get('quantity') or 1)
             card_info = c.get('card', {}).get('oracleCard', {})
