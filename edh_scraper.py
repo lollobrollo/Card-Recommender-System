@@ -338,37 +338,32 @@ def main(   card_dict: str = None,
 
     rate = SimpleRateLimiter(per_sec=rate_per_sec)
 
+    with open(out_jsonl, 'w', encoding='utf-8') as f:
+        print(f"Trying to fetch {max_archidekt} decks from Archidekt...")
+        try:
+            for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
+                did = deck_meta.get("id")
+                if did:
+                    d = archidekt_fetch_deck(did, known_oracle_ids, rate)
+                    if d:
+                        f.write(d.to_json() + '\n')
+                        decks_written += 1
+        except Exception as e:
+            print(f"\nAn error occurred during Archidekt fetching: {e}.\nMoving on to next step.")
+    print(f"\nFinished fetching. Wrote {decks_written} raw decks to '{out_jsonl}'.")
+
+    print("\nReading back raw decks for diversification...")
     decks = []
-    print(f"Trying to fetch {max_archidekt} decks.")
-    print("Fetching Archidekt decks…")
-    for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
-        did = deck_meta.get("id")
-        if did:
-            d = archidekt_fetch_deck(did, known_oracle_ids, rate)
-            if d:
-                decks.append(d)
+    with open(out_jsonl, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                decks.append(Deck(**data))
+            except json.JSONDecodeError:
+                continue
 
-    ### Not used in this version
-    # print("Fetching Moxfield decks…")
-    # fetched = 0; page = 1
-    # with tqdm(total=max_moxfield) as pbar:
-    #     while fetched < max_moxfield:
-    #         try:
-    #             results = moxfield_search_commander(page=page, rate=rate)
-    #             if not results: break
-    #             for row in results:
-    #                 if fetched >= max_moxfield: break
-    #                 pid = row.get('publicId')
-    #                 if pid:
-    #                     d = moxfield_fetch_deck(pid, name_to_id, rate)
-    #                     if d:
-    #                         decks.append(d)
-    #                         fetched += 1
-    #                         pbar.update(1)
-    #             page += 1
-    #         except Exception as e:
-    #             print(f"Warning: Error on Moxfield page {page}: {e}. Skipping page."); page += 1
-
+    print(f"Loaded {len(decks)} decks for processing.")
+    
     uniq = {(d.source, d.deck_id): d for d in decks}
     decks = list(uniq.values())
     print(f"\nCollected {len(decks)} unique decks before diversification.")
@@ -383,6 +378,39 @@ def main(   card_dict: str = None,
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
     print(f"Wrote {len(decks)} decks into {out_jsonl}")
 
+
+    # --- Now, we read the raw data back for diversification ---
+    
+    print("\nReading raw decks for diversification...")
+    decks = []
+    with open(out_jsonl, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                # Re-construct the Deck object from the JSON data
+                data = json.loads(line)
+                decks.append(Deck(**data))
+            except json.JSONDecodeError:
+                continue
+
+    # The rest of your script (deduplication, diversification) can now proceed as before.
+    print(f"Loaded {len(decks)} decks for processing.")
+    
+    # 1. Dedupe by (source,id) - though this is less necessary now
+    uniq = {(d.source, d.deck_id): d for d in decks}
+    decks = list(uniq.values())
+    print(f"Found {len(decks)} unique decks before diversification.")
+
+    # 2. Diversify
+    decks = diversify_v3(decks, per_bucket=per_bucket, n_duplicates_per_strategy=n_duplicates_per_strategy)
+    print(f"Kept {len(decks)} decks after diversification.")
+
+    # 3. Save the FINAL, diversified data
+    # This overwrites the raw scrape file with the clean, final version.
+    with open(out_jsonl, 'w', encoding='utf-8') as f:
+        for d in tqdm(decks, desc="Saving final diversified decks"):
+            f.write(d.to_json() + '\n')
+            
+    print(f"Wrote {len(decks)} final decks into {out_jsonl}")
 
 def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str):
     """
@@ -417,13 +445,13 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
 
 if __name__ == "__main__":
 
-    # main(
-    #     max_archidekt=70000,
-    #     #max_moxfield=100,
-    #     per_color_bucket=2000,
-    #     n_duplicates_per_strategy = 4,
-    #     rate_per_sec=5.0
-    # )
+    main(
+        max_archidekt=100000,
+        #max_moxfield=100,
+        per_color_bucket=2000,
+        n_duplicates_per_strategy = 4,
+        rate_per_sec=4.0
+    )
 
     this = os.path.dirname(__file__)
     decks_path = os.path.join(this, "data", "edh_decks.jsonl")
