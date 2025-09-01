@@ -12,7 +12,6 @@ import re
 from collections import defaultdict
 from models import TripletEDHDataset
 
-
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 4.0):
         self.per_sec = per_sec
@@ -130,7 +129,7 @@ def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimit
         if not card_list:
             return None
         for c in card_list:
-            categories = card_entry.get('categories', '').lower()
+            categories = [cat.lower() for cat in c.get('categories', [])]
             if 'sideboard' in categories or 'maybeboard' in categories: continue
 
             is_commander = 'Commander' in c.get('categories', [])
@@ -272,53 +271,78 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Dec
     Diversification function with two levels of control:
     1. Keeps a maximum of 'per_bucket' decks for each color identity.
     2. Within that bucket, keeps up to 'n_duplicates' for each unique (commander, strategic_tag) combination.
-    Most decks are untagged, so the limit for them is more lenient.
     """
-    buckets: Dict[str, List[Deck]] = defaultdict(list)
-
+    buckets = defaultdict(list)
     for d in decks:
         buckets[color_bucket(d.color_identity)].append(d)
-    excluded_report = {k: 0 for k in buckets.keys()} # Used to save bucket results on file, for later checks 
-
+    print(f"{len(buckets.keys())} colors present in these decks: {buckets.keys()}") # remember to delete this line
+    excluded_report = {}
     final_decks: List[Deck] = []
     
-    for bucket_name, deck_list in sorted(buckets.items()):
-        strategy_counts = defaultdict(int) # Key: (commander_tuple, tag_string), Value: count
+    for bucket_name, deck_lists in sorted(buckets.items()):
+        strategy_counts = defaultdict(int)
         kept_deck_ids = set()
         bucket_output = []
-        excluded_report[bucket_name] = max(0, len(bucket_output) - per_bucket)
 
-        random.shuffle(deck_list)
-        for deck in deck_list:
+        random.shuffle(deck_lists)
+        for deck in deck_lists:
             if len(bucket_output) >= per_bucket:
                 break
+                
             commander_key = tuple(sorted(deck.commander_ids))
             strategic_tags = extract_strategic_tags(deck.tags)
 
-            keep_deck = False
+            valid_strategies = []
             for tag in strategic_tags:
                 strategy_key = (commander_key, tag)
-                if tag != "untagged" and strategy_counts[strategy_key] < n_duplicates:
-                    keep_deck = True
-                    strategy_counts[strategy_key] += 1
-                if tag == "untagged" and strategy_counts["untagged"] < n_duplicates*4:
-                    keep_deck = True
-                    strategy_counts[strategy_key] += 1
+                limit = n_duplicates * 4 if tag == "untagged" else n_duplicates
 
-            if keep_deck and deck.deck_id not in kept_deck_ids:
+                if strategy_counts[strategy_key] < limit:
+                    should_keep_deck = True
+                    valid_strategies.append(strategy_key)
+
+            if not valid_strategies:
+                continue
+
+            greedy_assignment = min(valid_strategies, key=lambda s_key: strategy_counts[s_key])
+            if deck.deck_id not in kept_deck_ids:
                 bucket_output.append(deck)
                 kept_deck_ids.add(deck.deck_id)
+                strategy_count[greedy_assignment] += 1
+
+        total_in_bucket = len(deck_lists)
+        kept_in_bucket = len(bucket_output)
+
+        excluded_report[bucket_name] = {
+            "total": total_in_bucket,
+            "kept": kept_in_bucket,
+            "excluded": total_in_bucket - kept_in_bucket
+        }
 
         final_decks.extend(bucket_output)
-    excluded_report_sorted = dict(sorted(excluded_report.items(), key = lambda item: item[1], reverse=True))
+
+    excluded_report_sorted = dict(sorted(
+        excluded_report.items(), 
+        key=lambda item: item[1]['excluded'], 
+        reverse=True
+    ))
+
     report_path = os.path.join(os.path.dirname(__file__), "data", "buckets_exclusion_report.pt")
     torch.save(excluded_report_sorted, report_path)
+    print(f"Diversification report saved to {report_path}")
+
+    print("\n--- Diversification Report (Top 5 Exclusions) ---")
+    for i, (bucket, stats) in enumerate(excluded_report_sorted.items()):
+        if i >= 5: break
+        print(f"Bucket '{bucket}': Total={stats['total']}, Kept={stats['kept']}, Excluded={stats['excluded']}")
+    print("-------------------------------------------------")
 
     return final_decks
     
 
 def main(   card_dict: str = None,
             out_jsonl: str = None,
+            out_jsonl_diversified: str = None,
             max_archidekt: int = 800,
             max_moxfield: int = 800,
             per_color_bucket: int = 200,
@@ -326,13 +350,15 @@ def main(   card_dict: str = None,
             anchor_sizes: Optional[List[int]] = None,
             rate_per_sec: float = 2.0):
 
-    dir = os.path.dirname(__file__) or "."
+    this = os.path.dirname(__file__) or "."
     if card_dict is None:
-        card_dict = os.path.join(dir, "data", "card_dict.pt")
+        card_dict = os.path.join(this, "data", "card_dict.pt")
     if out_jsonl is None:
-        out_jsonl = os.path.join(dir, "data", "edh_decks.jsonl")
-    
-    os.makedirs(dir, exist_ok=True)
+        out_jsonl = os.path.join(this, "data", "edh_decks.jsonl")
+    if out_jsonl_diversified is None:
+        out_jsonl_diversified = os.path.join(this, "data", "edh_decks_diversified.jsonl")
+
+    os.makedirs(this, exist_ok=True)
     name_to_id, known_oracle_ids = load_name_maps(card_dict)
     if not name_to_id: return
 
@@ -341,6 +367,7 @@ def main(   card_dict: str = None,
     with open(out_jsonl, 'w', encoding='utf-8') as f:
         print(f"Trying to fetch {max_archidekt} decks from Archidekt...")
         try:
+            decks_written = 0
             for deck_meta in tqdm(archidekt_iter_decks(limit=max_archidekt, rate=rate), total=max_archidekt):
                 did = deck_meta.get("id")
                 if did:
@@ -370,47 +397,15 @@ def main(   card_dict: str = None,
     decks = diversify(decks, per_bucket=per_color_bucket, n_duplicates= n_duplicates_per_strategy)
     print(f"Kept {len(decks)} decks after diversification.")
 
-    with open(out_jsonl, 'w', encoding='utf-8') as f:
+    with open(out_jsonl_diversified, 'w', encoding='utf-8') as f:
         for d in tqdm(decks, desc="Saving decks to JSONL"):
             row = asdict(d)
             # if anchor_sizes:
             #     row['anchors'] = make_anchor_slices(d, anchor_sizes)
             f.write(json.dumps(row, ensure_ascii=False) + '\n')
-    print(f"Wrote {len(decks)} decks into {out_jsonl}")
+    print(f"Wrote {len(decks)} final decks decks into {out_jsonl_diversified}")
 
 
-    # --- Now, we read the raw data back for diversification ---
-    
-    print("\nReading raw decks for diversification...")
-    decks = []
-    with open(out_jsonl, 'r', encoding='utf-8') as f:
-        for line in f:
-            try:
-                # Re-construct the Deck object from the JSON data
-                data = json.loads(line)
-                decks.append(Deck(**data))
-            except json.JSONDecodeError:
-                continue
-
-    # The rest of your script (deduplication, diversification) can now proceed as before.
-    print(f"Loaded {len(decks)} decks for processing.")
-    
-    # 1. Dedupe by (source,id) - though this is less necessary now
-    uniq = {(d.source, d.deck_id): d for d in decks}
-    decks = list(uniq.values())
-    print(f"Found {len(decks)} unique decks before diversification.")
-
-    # 2. Diversify
-    decks = diversify_v3(decks, per_bucket=per_bucket, n_duplicates_per_strategy=n_duplicates_per_strategy)
-    print(f"Kept {len(decks)} decks after diversification.")
-
-    # 3. Save the FINAL, diversified data
-    # This overwrites the raw scrape file with the clean, final version.
-    with open(out_jsonl, 'w', encoding='utf-8') as f:
-        for d in tqdm(decks, desc="Saving final diversified decks"):
-            f.write(d.to_json() + '\n')
-            
-    print(f"Wrote {len(decks)} final decks into {out_jsonl}")
 
 def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str):
     """
@@ -448,8 +443,8 @@ if __name__ == "__main__":
     main(
         max_archidekt=100000,
         #max_moxfield=100,
-        per_color_bucket=2000,
-        n_duplicates_per_strategy = 4,
+        per_color_bucket=3000,
+        n_duplicates_per_strategy = 10,
         rate_per_sec=4.0
     )
 
