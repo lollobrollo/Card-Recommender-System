@@ -246,7 +246,7 @@ ALL_TAGS = [
     "satyr", "scarecrows", "scry", "sea creatures", "self-damage", "self-discard", "self-mill", "shades", "shadowborn apostles", "shamans", "shapeshifters", "sharks", "shrines",
     "skeletons", "slime against humanity", "slivers", "snakes", "sneak attack", "snow", "soldiers", "spacecraft", "specters", "speed", "spell copy", "spellslinger", "sphinxes",
     "spiders", "spirits", "squirrels", "stax", "stickers", "stompy", "storm", "sunforger", "surveil", "suspend", "tap/untap", "tempest hawk", "templar knights", "tempo", "theft",
-    "thopters", "time counters", "time lords", "tiny leaders", "tokens", "toolbox", "topdecks", "toughness", "transform", "trasure", "treefolk", "turbo fog", "turtles", "tyranids",
+    "thopters", "time counters", "time lords", "tiny leaders", "tokens", "toolbox", "topdecks", "toughness", "transform", "treasure", "treefolk", "turbo fog", "turtles", "tyranids",
     "unblockable", "unicorns", "unmodified precon", "upgraded precon", "vampires", "vanilla", "vehicles", "voltron", "voting", "warriors", "weenies", "werewolves", "wheels",
     "wizards", "wolves", "wraiths", "wurms", "x spells", "zirda", "zombies", "zoo"
 ]

@@ -178,7 +178,7 @@ def extract_card_types(card):
     return card_types_set
 
 
-def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_name=True):
+def preprocess_oracle_text(text, card_name="", remove_reminder=True, mana_as_words=True, mask_name=True):
     """
     Preprocess Oracle text for sentence encoding
     Args:
@@ -186,6 +186,7 @@ def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_
         remove_reminder (bool): If True, strips reminder text in parentheses (keywords encoded separately, could be redundant)
         mana_as_words (bool): If True, replaces mana symbols like {G} with words ("green mana")
         mask_name (bool): If True, replace most istances of card self reference with a generic placeholder
+        card_name (srt): name of the card, used to mask its istances in the card
     Returns:
         str: The cleaned Oracle text.
     """
@@ -217,30 +218,24 @@ def preprocess_oracle_text(text, remove_reminder=True, mana_as_words=True, mask_
         for symbol, replacement in mana_map.items():
             text = text.replace(symbol, replacement)
 
-    import re
-
     # 4. Replace card self references with placeholder
     if mask_name:
-        # Escape card name for regex, match whole word case-insensitive
-        card_name_pattern = re.escape(card_name)
-        # \b for word boundaries so partial matches don't occur
-        card_name_regex = re.compile(rf'\b{card_name_pattern}\b', flags=re.IGNORECASE)
-        # Phrases that commonly refer to the card itself
         self_ref_phrases = [
-            r'this card',
-            r'this creature',
-            r'this artifact',
-            r'this enchantment',
-            r'this planeswalker',
-            r'this land',
-            r'this permanent',
+            r'this card', r'this creature', r'this artifact', r'this enchantment',
+            r'this planeswalker', r'this land', r'this permanent'
         ]
         # Compile regex for self reference phrases (word boundaries + case insensitive)
         self_ref_regex = re.compile(r'\b(' + '|'.join(self_ref_phrases) + r')\b', flags=re.IGNORECASE)
-        
-        text = card_name_regex.sub('[CARD]', text)
+
         text = self_ref_regex.sub('[CARD]', text)
 
+        if card_name and isinstance(card_name, str):
+            name_to_mask = card_name.split(' // ')
+            for name in name_to_mask: # handles both names of double-faced cards if present
+                card_name_pattern = re.escape(name)
+                card_name_regex = re.compile(rf'\b{card_name_pattern}\b', flags=re.IGNORECASE)
+                text = card_name_regex.sub('[CARD]', text)
+            
     # 5. Normalize spaces
     text = re.sub(r"\s+", " ", text)
 
