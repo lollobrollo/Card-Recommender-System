@@ -15,9 +15,10 @@ import io
 from PIL import Image
 import itertools
 import torch
+from torchvision import transforms
 import utils
 from sentence_transformers import SentenceTransformer
-from torchvision import transforms
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
 def download_data(output_path):
@@ -330,13 +331,15 @@ def download_images(data_path, output_folder=None):
 def build_card_representations(batch_size=8, use_img=False):
     """
     Takes in card data and turns them into corresponding card representations,
-    which are saved into a dictionary and later into a file for later use.
+    which are saved as a dictionary into a file for later use.
     Args:
         batch_size (int): Size of card batches processed by models
         use_img (bool): If True, add to the representation the card image embedding
     """
     base_dir = os.path.dirname(__file__)
     data_dir = os.path.join(base_dir, "data")
+    models_dir = os.path.join(base_dir, "models")
+
     cards_path = os.path.join(data_dir, "clean_data.json")
     images_dir = os.path.join(data_dir, "images")
     dict_path = os.path.join(data_dir, "card_dict.pt")
@@ -345,13 +348,22 @@ def build_card_representations(batch_size=8, use_img=False):
         output_path = os.path.join(data_dir, "card_repr_dict_v2.pt")
     else:
         output_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
-    encoder_path = os.path.join(base_dir, "models", "ImgEncoder.pt")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     card_dict = torch.load(dict_path, weights_only=False)
-    encoder = utils.load_img_encoder(encoder_path, device)
-    text_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
+    encoder_path = os.path.join(models_dir, "ImgEncoder.pt")
+    if use_img:
+        encoder = utils.load_img_encoder(encoder_path, device)
+
+    role_model_path = os.path.join(models_dir, "card-role-classifier-final") # one-hot encodes roles of cards
+    role_tokenizer = AutoTokenizer.from_pretrained(role_model_path)
+    role_model = AutoModelForSequenceClassification.from_pretrained(role_model_path).to(device)
+    role_model.eval()
+
+    foundation_model_path = os.path.join(models_dir, "magic-distilbert-base-v1") # specialized model for sentence embeddings
+    semantic_text_model = SentenceTransformer(foundation_model_path, device=device)
+    
     # Ordered lists used to create one-hot encodings of variables
     all_types, all_keywords = utils.get_all_card_types_and_keywords(cards_path)
     rarity_levels = ["common", "uncommon", "rare", "mythic"]
@@ -395,9 +407,17 @@ def build_card_representations(batch_size=8, use_img=False):
             with torch.no_grad():
                 img_encoded_batch = encoder.encode(imgs) # shape: (batch_size, 1024)
 
-        # Encode texts batch
-        oracle_texts = [card.get("oracle_text", "") for card in cards_batch]
-        text_emb_batch = text_model.encode(oracle_texts, batch_size=batch_size, convert_to_tensor=True)
+        # Encode semantic embeddings
+        oracle_texts = [utils.preprocess_oracle_text(card.get("oracle_text", ""), card.get("name", "")) for card in cards_batch]
+        text_emb_batch = semantic_text_model.encode(oracle_texts, batch_size=batch_size, convert_to_tensor=True)
+        
+        # Encode oracle texts
+        semantic_emb_batch = semantic_text_model.encode(oracle_texts, convert_to_tensor=True, device=device)
+
+        # Encode roles of cards
+        role_inputs = role_tokenizer(oracle_texts, return_tensors='pt', padding=True, truncation=True).to(device)
+        with torch.no_grad():
+            role_logits_batch = role_model(**role_inputs).logits
 
         # Build vector representations
         for i, card in enumerate(cards_batch):
@@ -421,15 +441,17 @@ def build_card_representations(batch_size=8, use_img=False):
             # Concatenate all features as one tensor
             parts = [
                 torch.as_tensor(card_types, dtype=torch.float32, device="cpu"),
+                torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(stats, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(rarity_encoded, dtype=torch.float32, device="cpu"),
-                torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(color_id_encoded, dtype=torch.float32, device="cpu"),
                 torch.tensor([cmc], dtype=torch.float32),
-                text_emb_batch[i].to("cpu")
+                semantic_emb_batch[i].cpu(),
+                role_logits_batch[i].cpu()
             ]
-            if use_img:
+            if use_img and img_encoded_batch is not None:
                 parts.append(img_encoded_batch[i].to("cpu"))
+
             card_vector = torch.cat(parts)
             card_repr[card["oracle_id"]] = card_vector.cpu()
 
@@ -456,16 +478,16 @@ def build_card_representations(batch_size=8, use_img=False):
 
 if __name__ == "__main__":
     # download = input("Download fresher data? (Y/N): ").strip().lower() == "y"
-    base_dir = os.path.dirname(os.path.realpath(__file__))
-    raw_data = os.path.join(base_dir, "data", "raw_data.json")
-    clean_data = os.path.join(base_dir, "data", "clean_data.json")
+    # base_dir = os.path.dirname(os.path.realpath(__file__))
+    # raw_data = os.path.join(base_dir, "data", "raw_data.json")
+    # clean_data = os.path.join(base_dir, "data", "clean_data.json")
 
     # download_data(raw_data)
     # filter_data(raw_data, clean_data)
     # download_images(clean_data)
 
     # Found 33504 unique card images to download/process.
-    # after fixing the filter, cards after filtering: 29444
+    # cards after filtering: 29444
 
     # Added stricter filters, need to delete some images
     # img_dir = os.path.join(os.path.dirname(__file__), "data", "images")
@@ -476,6 +498,6 @@ if __name__ == "__main__":
 
     # print(count_cards(clean_data))
 
-    build_card_representations(batch_size=16, use_img=False)
-    build_card_representations(batch_size=16, use_img=True)
+    build_card_representations(batch_size=8, use_img=False)
+    build_card_representations(batch_size=8, use_img=True)
     
