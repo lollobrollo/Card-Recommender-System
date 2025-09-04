@@ -19,7 +19,7 @@ from torchvision import transforms
 import utils
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
+from models import load_img_encoder
 
 def download_data(output_path):
     """
@@ -354,7 +354,7 @@ def build_card_representations(batch_size=8, use_img=False):
 
     encoder_path = os.path.join(models_dir, "ImgEncoder.pt")
     if use_img:
-        encoder = utils.load_img_encoder(encoder_path, device)
+        encoder = load_img_encoder(encoder_path, device)
 
     role_model_path = os.path.join(models_dir, "card-role-classifier-final") # one-hot encodes roles of cards
     role_tokenizer = AutoTokenizer.from_pretrained(role_model_path)
@@ -498,6 +498,6 @@ if __name__ == "__main__":
 
     # print(count_cards(clean_data))
 
-    build_card_representations(batch_size=8, use_img=False)
-    build_card_representations(batch_size=8, use_img=True)
+    # build_card_representations(batch_size=16, use_img=False)
+    build_card_representations(batch_size=16, use_img=True)
     
