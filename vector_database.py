@@ -11,7 +11,7 @@ import utils
 from more_itertools import chunked
 from itertools import combinations
 
-def build_and_save_chroma_db(card_feature_map_path, embedder_checkpoint_path, cards_metadata_path, client):
+def build_and_save_chroma_db(card_feature_map_path, embedder_checkpoint_path, cards_metadata_path, client, db_name):
     """
     Loads card features, generates embeddings using a trained model and saves them into a persistent ChromaDB database
     """
@@ -26,7 +26,7 @@ def build_and_save_chroma_db(card_feature_map_path, embedder_checkpoint_path, ca
     card_encoder = load_card_encoder(embedder_checkpoint_path, device)
     
     print(f"Initializing persistent ChromaDB.")
-    card_collection = client.get_or_create_collection(name="mtg_cards_v1")
+    card_collection = client.get_or_create_collection(name=db_name)
     
     card_metadata_map = build_metadata_map(cards_metadata_path, card_feature_map)
 
@@ -125,7 +125,7 @@ def build_metadata_map(clean_data_path, card_feature_map):
 # - - - - - - - - - - - - - Card Search - - - - - - - - - - - - -
 
 
-def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint_path:str, client=None):
+def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint_path:str, client=None, db_name=None):
     """
     Given a deck id, returns its embedding and its colors
     """
@@ -151,11 +151,18 @@ def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint
         deck_emb_tensor = model.deck_embedding(deck_tensor).squeeze(0)
     deck_emb = deck_emb_tensor.cpu().tolist()
 
-    if client == None:
+    if client is None:
+        print("Please provide a client.")
+        return None, None
+    if db_name is None:
+        print("Please provide database name.")
+        return None, None
+    
+    card_collection = client.get_collection(name=db_name)
+    if not card_collection:
         print("Client is not available.")
         return None, None
-    card_collection = client.get_collection(name="mtg_cards_v1")
-    
+
     results = card_collection.get(
         ids=decklist_ids,
         include=["metadatas"]
@@ -167,19 +174,26 @@ def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint
             color_str = metadata.get("color_identity", ",")
             card_colors = [color for color in color_str.strip(',').split(',') if color]
             deck_colors.update(card_colors)
+    # print(f"deck colors: {deck_colors}")
 
     return deck_emb, list(sorted(deck_colors))
 
 
-def recommend_cards(deck_embedding:list, n:int, colors=None, client=None):
+def recommend_cards(deck_embedding:list, n:int, colors=None, client=None, db_name=None):
     """
     Takes a deck embedding and returns the top N recommended cards, optionally filtered by color.
     """
-    if client == None:
-        print("Client is not available.")
+    if client is None:
+        print("Please provide a client.")
+        return []
+    if db_name is None:
+        print("Please provide database name.")
         return []
 
-    card_collection = client.get_collection(name="mtg_cards_v1")
+    card_collection = client.get_collection(name=db_name)
+    if not card_collection:
+        print("Client is not available.")
+        return None, None
 
     filter_metadata = {}
     if colors:
@@ -215,11 +229,13 @@ def build_color_subset_filter(colors):
     allowed_subsets = []
     for r in range(len(color_list) + 1):
         for subset in combinations(color_list, r):
-            if not subset: # empty subset
+            if not subset:
+                # if processing empty subset, add "C" for colorless
                 allowed_subsets.append(['C'])
-            else:
+            elif 'C' not in subset: # Check wether 'C' was inside original color_list and is getting coupled with other colors
                 allowed_subsets.append(list(subset))
-    
+    # print(f"allowed colors: {allowed_subsets}")
+
     # Format each subset into the delimited string format used in the DB
     # Example: ['U', 'W'] -> ",U,W,"
     formatted_subsets = []
@@ -236,16 +252,17 @@ if __name__ == "__main__":
     this = os.path.dirname(__file__)
     db_path = os.path.join(this, "card_db")
     feature_map = os.path.join(this, "data", "card_repr_dict_v1.pt")
-    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_3d.pt")
+    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div.pt")
     cards_metadata = os.path.join(this, "data", "clean_data.json")
+    db_name = "mtg_cards_v1_div"
 
     client = chromadb.PersistentClient(path=db_path)
-    # build_and_save_chroma_db(feature_map, embedder_checkpoint_path, cards_metadata, client)
+    build_and_save_chroma_db(feature_map, embedder_checkpoint_path, cards_metadata, client, db_name)
 
-    rielle_id = 11032857
-    repr_dict_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
-    deck_emb, deck_colors = process_deck_for_search(rielle_id, repr_dict_path, embedder_checkpoint_path, client)
-    results_1 = recommend_cards(deck_embedding=deck_emb, n=10, client=client)
-    results_2 = recommend_cards(deck_embedding=deck_emb, n=10, colors=deck_colors, client=client)
-    print(results_1)
-    print(results_2)
+    # rielle_id = 11032857
+    # repr_dict_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
+    # deck_emb, deck_colors = process_deck_for_search(rielle_id, repr_dict_path, embedder_checkpoint_path, client)
+    # results_1 = recommend_cards(deck_embedding=deck_emb, n=10, client=client)
+    # results_2 = recommend_cards(deck_embedding=deck_emb, n=10, colors=deck_colors, client=client)
+    # print(results_1)
+    # print(results_2)
