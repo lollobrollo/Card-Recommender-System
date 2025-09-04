@@ -2,9 +2,11 @@ import models
 import torch
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import os
 from tqdm import tqdm
+from transformers import get_linear_schedule_with_warmup
 
 
 # - - - - - - - - - - - - - - - - - Training cycle for card image representation - - - - - - - - - - - - - - - - - 
@@ -95,7 +97,7 @@ class Trainer:
     """
     General-purpose training class to handle model training, validation and checkpointing for different models
     """
-    def __init__(self, model, optimizer, loss_fn, train_loader, val_loader, checkpoint_path, device):
+    def __init__(self, model, optimizer, loss_fn, train_loader, val_loader, checkpoint_path, device, scheduler=None):
         self.model = model
         self.optimizer = optimizer
         self.loss_fn = loss_fn
@@ -103,6 +105,7 @@ class Trainer:
         self.val_loader = val_loader
         self.checkpoint_path = checkpoint_path
         self.device = device
+        self.scheduler = scheduler
         self.start_epoch = 0
         self.best_val_loss = float('inf')
 
@@ -118,7 +121,11 @@ class Trainer:
                 self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 self.start_epoch = checkpoint['epoch']
                 self.best_val_loss = checkpoint.get('loss', float('inf'))
+                if self.scheduler and 'scheduler_state_dict' in checkpoint:
+                    self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                    print("Resumed scheduler state.")
                 print(f"Resumed from epoch {self.start_epoch}. Best val loss: {self.best_val_loss:.6f}")
+
             except Exception as e:
                 print(f"Error loading checkpoint: {e}. Starting from scratch.")
         else:
@@ -131,6 +138,9 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'loss': val_loss,
         }
+        if self.scheduler:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
         torch.save(checkpoint, self.checkpoint_path)
         print(f"Checkpoint saved to '{self.checkpoint_path}'")
 
@@ -142,6 +152,10 @@ class Trainer:
             loss = step_fn(self.model, batch, self.loss_fn, self.device)
             loss.backward()
             self.optimizer.step()
+
+            if self.scheduler and isinstance(self.scheduler, torch.optim.lr_scheduler.LambdaLR):
+                 self.scheduler.step()
+
             running_loss += loss.item()
         return running_loss / len(self.train_loader)
 
@@ -164,6 +178,12 @@ class Trainer:
             train_loss = self._train_one_epoch(step_fn)
             val_loss = self._validate_one_epoch(step_fn)
 
+            if self.scheduler:
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau): # for schedulers that need a metric to step
+                    self.scheduler.step(val_loss)
+                elif not isinstance(self.scheduler, torch.optim.lr_scheduler.LambdaLR): # all other schedulers
+                     self.scheduler.step()
+
             if val_loss is not None:
                 print(f"Epoch Summary: Train Loss: {train_loss:.6f}, Val Loss: {val_loss:.6f}")
                 # Save the model only if validation loss improves
@@ -177,16 +197,33 @@ class Trainer:
         print("\n--- Training Finished ---")
 
 
-def cpr_step_fn(model, batch, loss_fn, device):
-    anchor_deck, positive_card, negative_card = batch
-    anchor_deck = anchor_deck.to(device)
-    positive_card = positive_card.to(device)
-    negative_card = negative_card.to(device)
+def cpr_step_fn(model, batch, loss_fn, device, temperature=0.5, eps=1e-6):
+    """
+    Distance-weighted negative sampling step function for triplet loss.
+    """
+    anchor_decks, positive_cards = batch
+    anchor_decks = anchor_decks.to(device)
+    positive_cards = positive_cards.to(device)
 
-    deck_emb, pos_emb, neg_emb = model(anchor_deck, positive_card, negative_card)
-    loss = loss_fn(deck_emb, pos_emb, neg_emb)
+    anchor_emb = model.deck_embedding(anchor_decks)
+    pos_emb = model.card_embedding(positive_cards)
+
+    # anchor_emb = F.normalize(anchor_emb, dim=-1)
+    # pos_emb = F.normalize(pos_emb, dim=-1)
+
+    dists = torch.cdist(anchor_emb, pos_emb, p=2) + eps
+    B = dists.size(0)
+    mask = torch.eye(B, dtype=torch.bool, device=device)
+    dists.masked_fill_(mask, float('inf'))
+
+    weights = torch.exp(-dists / temperature)
+    weights = weights / (weights.sum(dim=1, keepdim=True) + eps)
+
+    neg_indices = torch.multinomial(weights, num_samples=1).squeeze(1)
+    neg_emb = pos_emb[neg_indices]
+
+    loss = loss_fn(anchor_emb, pos_emb, neg_emb)
     return loss
-
 
 
 
@@ -228,20 +265,29 @@ if __name__ == "__main__":
 
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
     NUM_EPOCHS = 10
-    LEARNING_RATE = 0.0001 # TODO: could use a scheduler?
+    LEARNING_RATE = 0.00005
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    BATCH_SIZE = 128
 
-    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset.pt")
-    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_3d.pt")
+    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_div.pt")
+    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div.pt")
 
-    cpr_model = models.PipelineCPR(card_dim=1446, out_dim=3).to(DEVICE)
-    cpr_loss_fn = nn.TripletMarginLoss(margin=1.0) # TODO: combined loss for multi-task?
-    cpr_optimizer = optim.Adam(cpr_model.parameters(), lr=LEARNING_RATE)
+    cpr_model = models.PipelineCPR(card_dim=1846, out_dim=512).to(DEVICE)
+    cpr_loss_fn = nn.TripletMarginLoss(margin=0.3) # TODO: change margin
+    cpr_optimizer = optim.AdamW(cpr_model.parameters(), lr=LEARNING_RATE)
 
     cpr_full_dataset = torch.load(cpr_dataset_path, weights_only = False)
     train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [0.8, 0.2])
-    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=64, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=True)
-    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=64, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=False)
+    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=BATCH_SIZE, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=True)
+    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=BATCH_SIZE, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=False)
+
+    num_training_steps = NUM_EPOCHS * len(train_loader_cpr)
+    num_warmup_steps = int(0.05 * num_training_steps)
+    cpr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=cpr_optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps
+    )
 
     trainer_cpr = Trainer(
         model=cpr_model,
@@ -250,7 +296,8 @@ if __name__ == "__main__":
         train_loader=train_loader_cpr,
         val_loader=val_loader_cpr,
         checkpoint_path=cpr_checkpoint_path,
-        device=DEVICE
+        device=DEVICE,
+        scheduler=cpr_scheduler
     )
 
     trainer_cpr.train(NUM_EPOCHS, step_fn=cpr_step_fn)
