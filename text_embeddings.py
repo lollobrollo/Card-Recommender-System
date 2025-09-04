@@ -43,11 +43,12 @@ class Paths:
 
 # Hyperparameters
 class Config:
-    STAGE1_EPOCHS = 3
+    STAGE1_EPOCHS = 5
     STAGE3_EPOCHS = 4
     BATCH_SIZE = 16
     LEARNING_RATE = 2e-5
     DISTILLATION_TEMP = 2.0 # Temperature for knowledge distillation
+    ALPHA = 0.5 # Trade-off beween KL-loss and BCE for stage 3 training
 
 
 # STAGE 1: DOMAIN-ADAPTIVE PRE-TRAINING
@@ -111,7 +112,20 @@ def run_stage1_domain_pretraining():
 
     model_checkpoint = "distilbert-base-uncased"
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+
+    def build_vocab(texts, min_freq=5):
+        vocab = {}
+        for text in texts:
+            for token in text.split():
+                vocab[token] = vocab.get(token, 0) + 1
+        return [w for w, c in vocab.items() if c >= min_freq]
+
+    domain_vocab = build_vocab(all_texts)
+    tokenizer.add_tokens(domain_vocab) # Extend tokenizer with context specific tokens
+    print(f"Extended tokenizer with {len(domain_vocab)} MTG-specific tokens.")
+
     model = AutoModelForMaskedLM.from_pretrained(model_checkpoint)
+    model.resize_token_embeddings(len(tokenizer)) # Resize embeddings to account for new tokens
 
     def tokenize_function(examples):
         return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=128)
@@ -184,10 +198,22 @@ def run_stage2_zero_shot_labeling():
                 multi_label=True
             )
 
+            
+            CONF_THRESHOLD = 0.2
             for i, result in enumerate(batch_results):
                 oracle_id = batch[i][0]
-                role_scores = {label: score for label, score in zip(result['labels'], result['scores'])}
-                f_out.write(json.dumps({"oracle_id": oracle_id, "text": result['sequence'], "scores": role_scores}) + '\n')
+                role_scores = {}
+                for label, score in zip(result['labels'], result['scores']):
+                    if score < CONF_THRESHOLD:
+                        score *= 0.1 # labels with low confidence get their score lowered further in magnitude (lower importance in stage 3)
+                    role_scores[label] = score
+
+                if role_scores:
+                    f_out.write(json.dumps({
+                        "oracle_id": oracle_id,
+                        "text": result['sequence'],
+                        "scores": role_scores
+                    }) + '\n')
 
     print(f"Pseudo-labeled dataset saved to '{Paths.PSEUDO_LABELED_DATASET}'.")
 
@@ -196,17 +222,22 @@ def run_stage2_zero_shot_labeling():
 
 class DistillationTrainer(Trainer):
     """A custom Trainer for knowledge distillation."""
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs): # kwargs is here because it accepts num_items_in_batch
         student_outputs = model(**inputs)
         student_logits = student_outputs.logits
-        teacher_probabilities = inputs.get("labels")
+        teacher_probs = inputs.get("labels")
 
+        # KL divergence (softened distributions)
         soft_student_log_probs = F.log_softmax(student_logits / Config.DISTILLATION_TEMP, dim=-1)
-        soft_teacher_probs = F.softmax(teacher_probabilities / Config.DISTILLATION_TEMP, dim=-1) # idea: diminish teacher overconfidence
+        soft_teacher_probs = F.softmax(teacher_probs / Config.DISTILLATION_TEMP, dim=-1) # idea: diminish teacher overconfidence
+        distill_loss = nn.KLDivLoss(reduction="batchmean")(soft_student_log_probs, soft_teacher_probs)
 
-        distillation_loss = nn.KLDivLoss(reduction="batchmean")(soft_student_log_probs, soft_teacher_probs)
+        # BCE on teacher-provided scores (thresholded)
+        hard_loss = F.binary_cross_entropy_with_logits(student_logits, teacher_probs)
 
-        return (distillation_loss, student_outputs) if return_outputs else distillation_loss
+        loss = Config.ALPHA * distill_loss + (1 - Config.ALPHA) * hard_loss
+        return (loss, student_outputs) if return_outputs else loss
+
 
 def run_stage3_supervised_finetuning():
     """
