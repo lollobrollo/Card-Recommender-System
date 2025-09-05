@@ -327,8 +327,8 @@ class TripletEDHDataset(Dataset):
 
         pos_types = self.cat_feature_map[positive_card_id]["types"]
         pos_keyw = self.cat_feature_map[positive_card_id]["keywords"]
-        anchor_types = [self.cat_feature_map[id]["types"] for oid in anchor_deck_ids]
-        anchor_feats = [self.cat_feature_map[id]["keywords"] for oid in anchor_deck_ids]
+        anchor_types = torch.stack([self.cat_feature_map[oid]["types"] for oid in anchor_deck_ids])
+        anchor_keyw = torch.stack([self.cat_feature_map[oid]["keywords"] for oid in anchor_deck_ids])
 
         return anchor_deck_tensors, positive_card_tensor, anchor_types, anchor_keyw, pos_types, pos_keyw
 

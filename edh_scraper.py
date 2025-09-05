@@ -413,8 +413,9 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
     """
     try:
         card_feature_map = torch.load(card_feature_map_path)
+        cat_feature_map = torch.load(cat_feature_map_path)
     except Exception as e:
-        print(f"Couldn't load feature map: {e}")
+        print(f"Couldn't load feature maps: {e}")
  
     try:
         max_deck_size = 0; min_deck_size = 20
@@ -429,11 +430,11 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
                 min_deck_size = min(min_deck_size, len(cards))
         anchor_size_range = (min_deck_size, max_deck_size)
         
-        dataset = TripletEDHDataset(decklists, card_feature_map, anchor_size_range)
+        dataset = TripletEDHDataset(decklists, card_feature_map, cat_feature_map, anchor_size_range)
         torch.save(dataset, output_path)
+        print(f"successfully saved {len(decklists)} deckists into dataset to {output_path}")
     except Exception as e:
         print(f"Couldn't save initialised dataset: {e}")
-    print(f"successfully saved {len(decklists)} deckists into dataset to {output_path}")
 
 
 
@@ -453,7 +454,7 @@ if __name__ == "__main__":
     decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
     dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
     card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
-    cat_feat_map_path = os.path.join(data_dir, "type_keyword_dict.pt")
+    cat_feat_map_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
 
     create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
     create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)

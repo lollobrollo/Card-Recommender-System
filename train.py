@@ -203,15 +203,15 @@ def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5, eps=1e-6
     This function integrates the FeatureEncoder to create complete card representations before feeding them to the main encoders.
     """
     anchors, positives, anchor_types, anchor_keyw, pos_types, pos_keyw = batch
-    anchor_decks = anchor_decks.to(device)
-    positive_cards = positive_cards.to(device)
+    anchor_decks = anchors.to(device)
+    positive_cards = positives.to(device)
     anchor_types = anchor_types.to(device) # batch of sequences
     anchor_keyw = anchor_keyw.to(device)
     pos_types = pos_types.to(device) # batch of single items
     pos_keyw = pos_keyw.to(device)
 
-    anchor_cat_emb = model.feat_encoder(anchor_types, anchor_keyw)
-    pos_cat_emb = model.feat_encoder(pos_types, pos_keyw)
+    anchor_cat_emb = model.feature_encoder(anchor_types, anchor_keyw)
+    pos_cat_emb = model.feature_encoder(pos_types, pos_keyw)
 
     # (B, Seq_Len, Num_Features) + (B, Seq_Len, Cat_Emb_Dim) -> (B, Seq_Len, Total_Dim)
     anchor_decks_full = torch.cat((anchor_decks, anchor_cat_emb), dim=2)
@@ -235,44 +235,6 @@ def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5, eps=1e-6
     loss = loss_fn(anchor_emb, pos_emb, neg_emb)
     return loss
 
-
-def cpr_step_fn_(model, batch, loss_fn, device, temperature=0.5, eps=1e-6):
-    """
-    Distance-weighted negative sampling step function for triplet loss.
-    This function integrates the FeatureEncoder to create complete card representations before feeding them to the main encoders.
-    """
-    anchors, positives, anchor_types, anchor_keyw, pos_types, pos_keyw = batch
-    anchor_decks = anchor_decks.to(device)
-    positive_cards = positive_cards.to(device)
-    anchor_types = anchor_types.to(device) # batch of sequences
-    anchor_keyw = anchor_keyw.to(device)
-    pos_types = pos_types.to(device) # batch of single items
-    pos_keyw = pos_keyw.to(device)
-
-    anchor_cat_emb = model.feat_encoder(anchor_types, anchor_keyw)
-    pos_cat_emb = model.feat_encoder(pos_types, pos_keyw)
-
-    # (B, Seq_Len, Num_Features) + (B, Seq_Len, Cat_Emb_Dim) -> (B, Seq_Len, Total_Dim)
-    anchor_decks_full = torch.cat((anchor_decks, anchor_cat_emb), dim=2)
-    # (B, Num_Features) + (B, Cat_Emb_Dim) -> (B, Total_Dim)
-    positive_cards_full = torch.cat((positive_cards, pos_cat_emb), dim=1)
-    
-    anchor_emb = model.deck_embedding(anchor_decks_full)
-    pos_emb = model.card_embedding(positive_cards_full)
-
-    B = anchor_decks_full.size(0)
-    dists = torch.cdist(anchor_emb, pos_emb, p=2) + eps
-    mask = torch.eye(B, dtype=torch.bool, device=device)
-    dists.masked_fill_(mask, float('inf'))
-
-    # Sample a negative based on distance-weighted probability
-    weights = torch.exp(-dists / temperature)
-    weights = weights / (weights.sum(dim=1, keepdim=True) + eps)
-    neg_indices = torch.multinomial(weights, num_samples=1).squeeze(1)
-    neg_emb = pos_emb[neg_indices]
-
-    loss = loss_fn(anchor_emb, pos_emb, neg_emb)
-    return loss
 
 
 
