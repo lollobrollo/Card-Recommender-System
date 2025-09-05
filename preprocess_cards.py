@@ -343,6 +343,7 @@ def build_card_representations(batch_size=8, use_img=False):
     cards_path = os.path.join(data_dir, "clean_data.json")
     images_dir = os.path.join(data_dir, "images")
     dict_path = os.path.join(data_dir, "card_dict.pt")
+    type_and_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
     output_path = ""
     if use_img:
         output_path = os.path.join(data_dir, "card_repr_dict_v2.pt")
@@ -367,9 +368,10 @@ def build_card_representations(batch_size=8, use_img=False):
     # Ordered lists used to create one-hot encodings of variables
     all_types, all_keywords = utils.get_all_card_types_and_keywords(cards_path)
     rarity_levels = ["common", "uncommon", "rare", "mythic"]
-    color_id_levels = ["W", "U", "B", "R", "G", "C"]
+    color_id_levels = ["B", "C", "G", "R", "U", "W"]
 
     card_repr = {} # Used to save all card representations
+    type_and_keyw = {} # Saves intermediate one-hot encodings, which are used during training by FeatureEncoder layer (reason: dimensionality reduction of sparse vectors)
 
     def safe_int(val): # Used to safely interpret power and toughness
         if val == '*':
@@ -439,9 +441,10 @@ def build_card_representations(batch_size=8, use_img=False):
             cmc = extract_cmc(card.get("mana_cost"))
 
             # Concatenate all features as one tensor
+            ## !!! CARD TYPES AND KEYWORDS ARE SAVED SEPARATELY, WILL BE COMPRESSED DURING TRAINING BY FeatureEncoder
             parts = [
-                torch.as_tensor(card_types, dtype=torch.float32, device="cpu"),
-                torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
+                # torch.as_tensor(card_types, dtype=torch.float32, device="cpu"),
+                # torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(stats, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(rarity_encoded, dtype=torch.float32, device="cpu"),
                 torch.as_tensor(color_id_encoded, dtype=torch.float32, device="cpu"),
@@ -453,8 +456,14 @@ def build_card_representations(batch_size=8, use_img=False):
                 parts.append(img_encoded_batch[i].to("cpu"))
 
             card_vector = torch.cat(parts)
-            card_repr[card["oracle_id"]] = card_vector.cpu()
+            oid = card["oracle_id"]
+            card_repr[oid] = card_vector.cpu()
 
+            type_and_keyw[oid] = {
+                "types": torch.as_tensor(card_types, dtype=torch.float32, device="cpu"),
+                "keywords": torch.as_tensor(keywords_encoded, dtype=torch.float32, device="cpu")
+                }
+    
     # Main loop: batch cards before processing
     batch = []
     with open(cards_path, 'r', encoding='utf-8') as f:
@@ -470,7 +479,8 @@ def build_card_representations(batch_size=8, use_img=False):
 
     try:
         torch.save(card_repr, output_path)
-        print(f"Successfully saved dictionary to: {output_path}\n")
+        torch.save(type_and_keyw, type_and_keyw_path)
+        print(f"Successfully saved dictionaries to:\n{output_path}\n{type_and_keyw_path}\n")
     except Exception as e:
         print(f"\nError saving dictionary to {output_path}: {e}\n")    
 
@@ -483,13 +493,13 @@ if __name__ == "__main__":
     # clean_data = os.path.join(base_dir, "data", "clean_data.json")
 
     # download_data(raw_data)
-    # filter_data(raw_data, clean_data)
+    #filter_data(raw_data, clean_data)
     # download_images(clean_data)
 
-    # Found 33504 unique card images to download/process.
-    # cards after filtering: 29444
+    # # Found 33504 unique card images to download/process.
+    # # cards after filtering: 29444
 
-    # Added stricter filters, need to delete some images
+    # # Added stricter filters, need to delete some images
     # img_dir = os.path.join(os.path.dirname(__file__), "data", "images")
     # utils.synchronize_images_and_data(clean_data, img_dir)
     # Deleted 4060 stale images.
@@ -498,6 +508,6 @@ if __name__ == "__main__":
 
     # print(count_cards(clean_data))
 
-    # build_card_representations(batch_size=16, use_img=False)
+    build_card_representations(batch_size=16, use_img=False)
     build_card_representations(batch_size=16, use_img=True)
     

@@ -150,7 +150,7 @@ def show_reconstructions(checkpoint_path, img_dir, device='cuda' if torch.cuda.i
 
 
 class CardEncoder_v1(nn.Module):
-    def __init__(self, card_dim=1446, hidden_dim=1024, out_dim=512, p_drop=0.3):
+    def __init__(self, card_dim=1846, hidden_dim=1024, out_dim=512, p_drop=0.3):
         super().__init__()
     
         self.MLP = nn.Sequential(
@@ -165,28 +165,27 @@ class CardEncoder_v1(nn.Module):
         x = self.MLP(x)
         return F.normalize(x, p=2, dim=1)
 
-
+# GroupNorm vs BatchNorm (don't want to use LayerNorm)
 class DeckEncoder_v1(nn.Module):
     """
     Treats the deck as a sequence of cards -> uses Conv1d to extract features
     """
-    def __init__(self, card_dim=1446, out_dim=512):
+    def __init__(self, card_dim=1846, out_dim=512):
         super().__init__()
-
         self.conv_layers = nn.Sequential(
-            nn.Conv1d(in_channels=card_dim, out_channels=16, kernel_size=3, padding=1),
-            nn.BatchNorm1d(16), nn.ELU(True), nn.MaxPool1d(2, 2),
-            nn.Conv1d(16, 32, 3, padding=1), nn.BatchNorm1d(32), nn.ELU(True), nn.MaxPool1d(2, 2),
-            nn.Conv1d(32, 64, 3, padding=1), nn.BatchNorm1d(64), nn.ELU(True), nn.MaxPool1d(2, 2),
-            nn.Conv1d(64, 64, 3, padding=1), nn.BatchNorm1d(64), nn.ELU(True),
-            nn.Conv1d(64, 32, 3, padding=1), nn.BatchNorm1d(32), nn.ELU(True),
-            nn.Conv1d(32, 16, 3, padding=1), nn.BatchNorm1d(16), nn.ELU(True),
+            nn.Conv1d(in_channels=card_dim, out_channels=32, kernel_size=3, padding=1),
+            nn.GroupNorm(num_groups=8, num_channels=32), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(32, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(64, 128, 3, padding=1), nn.GroupNorm(16, 128), nn.ELU(True), nn.MaxPool1d(2, 2),
+            nn.Conv1d(128, 128, 3, padding=1), nn.GroupNorm(16, 128), nn.ELU(True),
+            nn.Conv1d(128, 64, 3, padding=1), nn.GroupNorm(8, 64), nn.ELU(True),
+            nn.Conv1d(64, 32, 3, padding=1), nn.GroupNorm(8, 32), nn.ELU(True),
             nn.AdaptiveMaxPool1d(1)
         )
 
         self.out = nn.Sequential(
             nn.Flatten(start_dim=1),  # (Batch, 64, 1) -> (Batch, 64)
-            nn.Linear(16, out_dim)
+            nn.Linear(32, out_dim)
         )
 
     def forward(self, x):
@@ -257,11 +256,13 @@ class SiameseHead(nn.Module):
 
 
 class PipelineCPR(nn.Module):
-    def __init__(self, card_dim=1446, card_hidden_dim=1024, embed_dim=512, out_dim=3):
+    def __init__(self, feature_encoder, partial_card_dim=797, card_hidden_dim=1024, embed_dim=512, out_dim=512):
         super().__init__()
 
-        self.card_encoder = CardEncoder_v1(card_dim=card_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)
-        self.deck_encoder = DeckEncoder_v1(card_dim=card_dim, out_dim=embed_dim)
+        self.feature_encoder = feature_encoder
+        total_dim = partial_card_dim + self.feature_encoder.output_dim
+        self.card_encoder = CardEncoder_v1(card_dim=total_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)
+        self.deck_encoder = DeckEncoder_v1(card_dim=total_dim, out_dim=embed_dim)
         self.siamese_head = SiameseHead(input_dim=embed_dim, hidden_dim=embed_dim, out_dim=out_dim)
 
     def card_embedding(self, x):
@@ -281,25 +282,30 @@ class PipelineCPR(nn.Module):
 class TripletEDHDataset(Dataset):
     """
     PyTorch Dataset that generates training triplets on the fly for the PipelineCPR
-    Has to be created with 'create_and_save_CPRdataset' function in utils.py
+    Can be created with 'create_and_save_CPRdataset' function in utils.py
     """
-    def __init__(self, decklists, card_feature_map, anchor_size_range=(30, 90)):
+    def __init__(self, decklists, card_feature_map, cat_feature_map, anchor_size_range=(20, 85)):
         """
         Args:
             decklists (list): A list of lists containing the oracle_ids of the cards in a deck (basic lands excluded)
             card_feature_map (dict): A dictionary mapping an oracle_id to its pre-computed feature tensor
+            cat_feature_map (dict): A dictionary of dictionaries mapping oracle_it to {"types": .., "keywords": ..}
             anchor_size_range (tuple): A (min, max) tuple for the number of cards to randomly select for the anchor deck
         """
         # Filter out any decks that are too small to sample from (& account for anchor size limits)
         self.decklists = [deck for deck in decklists if len(deck) > 30]
         self.card_feature_map = card_feature_map
-        self.all_card_ids = list(card_feature_map.keys()) # used for negative sampling
+        self.cat_feature_map = cat_feature_map
         self.anchor_size_range = anchor_size_range # since I'm taking out basic lands, min_anchor_size can be pretty low
 
     def __len__(self):
         return len(self.decklists)
 
     def __getitem__(self, idx):
+        """
+        Negative is not returned, as it is mined inside cpr_step_fn
+        also returns embeddings of types and keywords so that FeatureEncoder can "compress" them into a more meaningful representation
+        """
         deck = self.decklists[idx]
         deck_set = set(deck)
         random.shuffle(deck) # Shuffle the deck in-place to ensure a different random split on every epoch
@@ -316,39 +322,62 @@ class TripletEDHDataset(Dataset):
         holdout_ids = deck[anchor_size:]
         positive_card_id = random.choice(holdout_ids)
 
-        # Find a Negative Card: a random card from the card pool not present in the original decklist
-        negative_card_id = None
-        while negative_card_id is None or negative_card_id in deck_set:
-            negative_card_id = random.choice(self.all_card_ids)
-
         positive_card_tensor = self.card_feature_map[positive_card_id]
-        negative_card_tensor = self.card_feature_map[negative_card_id]
-        
         anchor_deck_tensors = torch.stack([self.card_feature_map[id] for id in anchor_deck_ids])
 
-        return anchor_deck_tensors, positive_card_tensor, negative_card_tensor
+        pos_types = self.cat_feature_map[positive_card_id]["types"]
+        pos_keyw = self.cat_feature_map[positive_card_id]["keywords"]
+        anchor_types = [self.cat_feature_map[id]["types"] for oid in anchor_deck_ids]
+        anchor_feats = [self.cat_feature_map[id]["keywords"] for oid in anchor_deck_ids]
+
+        return anchor_deck_tensors, positive_card_tensor, anchor_types, anchor_keyw, pos_types, pos_keyw
 
 
 def triplet_collate_fn(batch):
     """
     A custom collate function to handle variable-length anchor decks in a batch:
     it pads the anchor decks to the same length and stacks the cards
+    Negative card is not considered as it will be picked inside cpr_step_fn in train.py
+    Also assembles features to be processed by FeatureEncoder
     """
     # Separate the components of the batch
     anchor_decks = [item[0] for item in batch]
     positive_cards = [item[1] for item in batch]
-    negative_cards = [item[2] for item in batch]
+    anchor_types = [item[2] for item in batch]
+    anchor_keyw = [item[3] for item in batch]
+    pos_types = [item[4] for item in batch]
+    pos_keyw = [item[5] for item in batch]
 
     # Use pad_sequence to handle the variable-length anchor decks.
-    # `batch_first=True` ensures the output shape is (Batch Size, Max_Seq_Len, Feature_Dim)
+    # batch_first=True ensures the output shape is (Batch Size, Max_Seq_Len, Feature_Dim)
     padded_anchors = pad_sequence(anchor_decks, batch_first=True, padding_value=0.0)
-
-    # Stack the positive and negative cards, which are already of a fixed size
     batched_positives = torch.stack(positive_cards)
-    batched_negatives = torch.stack(negative_cards)
 
-    return padded_anchors, batched_positives, batched_negatives
+    batched_anchor_types = pad_sequence(anchor_types, batch_first=True, padding_value=0.0)
+    batched_anchor_keyw = pad_sequence(anchor_keyw, batch_first=True, padding_value=0.0)
+    batched_pos_types = torch.stack(pos_types)
+    batched_pos_keyw = torch.stack(pos_keyw)
 
+    return padded_anchors, batched_positives, batched_anchor_types, batched_anchor_keyw, batched_pos_types, batched_pos_keyw
+
+
+class FeatureEncoder(nn.Module):
+    """
+    Takes integer indices for categorical features (types, keywords) and
+    converts them into a single, dense, trainable feature vector.
+    """
+    def __init__(self, num_types: int, type_emb_dim: int, num_keyw: int, keyw_emb_dim: int):  
+        super().__init__()
+        # Tried with nn.Embedder with poor results
+        self.type_projector = nn.Linear(num_types, type_emb_dim)
+        self.keyword_projector = nn.Linear(num_keyw, keyw_emb_dim)
+        self.output_dim = type_emb_dim + keyw_emb_dim
+
+    def forward(self, type_vectors, keyword_vectors):
+        type_emb = self.type_projector(type_vectors)
+        keyword_emb = self.keyword_projector(keyword_vectors)
+        
+        return torch.cat([type_emb, keyword_emb], dim=-1)
 
 
 if __name__ == "__main__":

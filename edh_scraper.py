@@ -354,9 +354,9 @@ def main(   card_dict: str = None,
     if card_dict is None:
         card_dict = os.path.join(this, "data", "card_dict.pt")
     if out_jsonl is None:
-        out_jsonl = os.path.join(this, "data", "edh_decks.jsonl")
+        out_jsonl = os.path.join(this, "data", "edh_decks_all.jsonl")
     if out_jsonl_diversified is None:
-        out_jsonl_diversified = os.path.join(this, "data", "edh_decks_diversified.jsonl")
+        out_jsonl_diversified = os.path.join(this, "data", "edh_decks_div.jsonl")
 
     os.makedirs(this, exist_ok=True)
     name_to_id, known_oracle_ids = load_name_maps(card_dict)
@@ -406,8 +406,7 @@ def main(   card_dict: str = None,
     print(f"Wrote {len(decks)} final decks decks into {out_jsonl_diversified}")
 
 
-
-def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str):
+def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_map_path: str, cat_feature_map_path: str):
     """
     Creastes and saves a dataset for the training of the PipelineCPR model
     Extracts required informations from the decks scraped from the web (archidekt)
@@ -416,9 +415,9 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
         card_feature_map = torch.load(card_feature_map_path)
     except Exception as e:
         print(f"Couldn't load feature map: {e}")
-
+ 
     try:
-        max_deck_size = 0; min_deck_size = 101
+        max_deck_size = 0; min_deck_size = 20
         decklists = []
         with open(decks_path, "r", encoding="utf-8") as decks:
             for line in decks:
@@ -440,16 +439,21 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
 
 if __name__ == "__main__":
 
-    main(
-        max_archidekt=100000,
-        #max_moxfield=100,
-        per_color_bucket=3000,
-        n_duplicates_per_strategy = 10,
-        rate_per_sec=4.0
-    )
+    # main(
+    #     max_archidekt=100000,
+    #     #max_moxfield=100,
+    #     per_color_bucket=3000,
+    #     n_duplicates_per_strategy = 10,
+    #     rate_per_sec=4.0
+    # )
 
-    this = os.path.dirname(__file__)
-    decks_path = os.path.join(this, "data", "edh_decks.jsonl")
-    dataset_path = os.path.join(this, "data", "cpr_dataset.pt")
-    card_feature_map_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
-    create_and_save_CPRdataset(decks_path, dataset_path, card_feature_map_path)
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    decks_path_div = os.path.join(data_dir, "edh_decks_div.jsonl")
+    dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
+    decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
+    dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
+    card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
+    cat_feat_map_path = os.path.join(data_dir, "type_keyword_dict.pt")
+
+    create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
+    create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)
