@@ -15,6 +15,7 @@ import edh_scraper
 import utils
 from more_itertools import chunked
 from itertools import combinations
+from sentence_transformers import SentenceTransformers
 
 def build_and_save_chroma_db(card_to_embedding_path, cards_metadata_path, client, db_name):
     """
@@ -118,117 +119,95 @@ def build_metadata_map(clean_data_path, all_oracle_ids):
 # - - - - - - - - - - - - - Card Search - - - - - - - - - - - - -
 
 
-def create_card_representation(oid, partial_map, cat_map, feature_encoder):
+SEMANTIC_DIM = 768 # The output dim of 'magic-distilbert-base-v1'
+ROLE_DIM = 16 # The number of labels in ROLE_LABELS in text_embeddings.py
+
+class CardEmbedder:
     """
-    creates and returns a complete card representation for a single card
+    An inference class to handle the creation of full card representations and embeddings.
+    It loads all necessary models and data maps once for batched processing.
     """
-    card_types, card_keyw = cat_map[oid].values()
-    card_types = card_types.unsqueeze(0).cpu()
-    card_keyw = card_keyw.unsqueeze(0).cpu()
-    cat_embeddings = feature_encoder(card_types, card_keyw).squeeze(0)
-    partial_tensor = partial_map[oid].cpu()
-    final_tensor = torch.cat((partial_tensor, cat_embeddings)).cpu()
-    return final_tensor
+    def __init__(self, cpr_checkpoint_path, partial_map_path, cat_map_path, llm_path, num_types, num_keywords):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.cpr_model = load_card_encoder(cpr_checkpoint_path, num_types, num_keywords, self.device)
+        self.partial_map = torch.load(partial_map_path)
+        self.cat_map = torch.load(cat_map_path)
+        self.all_known_ids = set(self.partial_map.keys())
+        self.llm = SentenceTransformer(llm_path, device=self.device)
 
+    def assemble_full_representations(self, oids: list):
+        """
+        Takes a list of oracle_ids and efficiently assembles their full
+        925-dimensional representation tensors in a batch.
+        """
+        batch_partials = [self.partial_map[oid] for oid in oids]
+        batch_types = [self.cat_map[oid]["types"] for oid in oids]
+        batch_keywords = [self.cat_map[oid]["keywords"] for oid in oids]
 
-def process_deck_for_search(deck_id, partial_repr_dict, cat_repr_dict_path, embedder_checkpoint_path, num_types, num_keyw, client=None, db_name=None):
-    """
-    Given a deck id, returns its embedding and its colors
-    """
-    partial_repr_dict = torch.load(partial_repr_dict, weights_only = False)
-    type_keyw_dict = torch.load(cat_repr_dict_path, weights_only = False)
+        partials_tensor = torch.stack(batch_partials).to(self.device)
+        types_tensor = torch.stack(batch_types).to(self.device)
+        keywords_tensor = torch.stack(batch_keywords).to(self.device)
 
-    all_known_ids = set(partial_repr_dict.keys())
-    deck = edh_scraper.archidekt_fetch_deck(deck_id, known_ids=all_known_ids)
-    if not deck:
-        print(f"Could not fetch or process deck with ID: {deck_id}")
-        return None, None
-
-    decklist_ids = deck.commander_ids + deck.mainboard_ids
-    assert type(decklist_ids) == list
-
-    model = load_card_encoder(embedder_checkpoint_path, num_types, num_keyw, torch.device("cpu"))
-
-    repr_decklist = []
-    for oid in decklist_ids:
-        card_repr = create_card_representation(oid, partial_repr_dict, type_keyw_dict, model.feature_encoder)
-        repr_decklist.append(card_repr)
-
-    if not repr_decklist:
-        print("Deck contains no known cards.")
-        return None, None
-
-    # Model expects a batch -> add a batch dimension with unsqueeze(0)
-    deck_tensor = torch.stack(repr_decklist).unsqueeze(0)
-    with torch.no_grad():
-        deck_emb_tensor = model.deck_embedding(deck_tensor).squeeze(0)
-    deck_emb = deck_emb_tensor.cpu().tolist()
-
-    if client is None:
-        print("Please provide a client.")
-        return None, None
-    if db_name is None:
-        print("Please provide database name.")
-        return None, None
-    
-    card_collection = client.get_collection(name=db_name)
-    if not card_collection:
-        print("Client is not available.")
-        return None, None
-
-    results = card_collection.get(
-        ids=decklist_ids,
-        include=["metadatas"]
-    )
-
-    deck_colors = set()
-    if results and results.get("metadatas"):
-        for metadata in results['metadatas']:
-            color_str = metadata.get("color_identity", ",")
-            card_colors = [color for color in color_str.strip(',').split(',') if color]
-            deck_colors.update(card_colors)
-    # print(f"deck colors: {deck_colors}")
-
-    return deck_emb, list(sorted(deck_colors))
-
-
-def recommend_cards(deck_embedding:list, n:int, colors=None, client=None, db_name=None):
-    """
-    Takes a deck embedding and returns the top N recommended cards, optionally filtered by color.
-    """
-    if client is None:
-        print("Please provide a client.")
-        return []
-    if db_name is None:
-        print("Please provide database name.")
-        return []
-
-    card_collection = client.get_collection(name=db_name)
-    if not card_collection:
-        print("Client is not available.")
-        return None, None
-
-    filter_metadata = {}
-    if colors:
-        filter_metadata = build_color_subset_filter(colors)
-    
-    try:
-        results = card_collection.query(
-            query_embeddings=[deck_embedding],
-            n_results=n,
-            where=filter_metadata if filter_metadata else None
-        )
-
-        card_names = []
-        if results and results['ids'][0]:
-            for metadata in results['metadatas'][0]:
-                card_names.append(metadata.get("name", "Unknown Name"))
+        with torch.no_grad():
+            cat_embeddings = self.cpr_model.feature_encoder(types_tensor, keywords_tensor)
         
-        return card_names
+        full_repr_batch = torch.cat([partials_tensor, cat_embeddings], dim=1)
+        return full_repr_batch
 
-    except Exception as e:
-        print(f"An error occurred during ChromaDB query: {e}")
-        return []
+    def get_card_embeddings(self, oids: list):
+        """
+        Gets the final 512-dim embeddings for a list of cards.
+        """
+        if not oids:
+            return torch.tensor([])
+        
+        full_reprs = self.assemble_full_representations(oids)
+        with torch.no_grad():
+            embeddings = self.cpr_model.card_embedding(full_reprs)
+        return embeddings
+
+    def get_deck_embedding(self, oids: list):
+        """
+        Gets the final 512-dim embedding for a deck (list of cards).
+        """
+        if not oids:
+            return torch.tensor([])
+
+        full_reprs = self.assemble_full_representations(oids).unsqueeze(0) # Shape: [1, num_cards, 925]
+        with torch.no_grad():
+            embedding = self.cpr_model.deck_embedding(full_reprs).squeeze(0)
+        return embedding
+
+    def get_prompt_dummy_embedding(self, prompt: str, deck_oids: list):
+        """
+        Creates a 512-dim embedding representing the prompt's intent within the deck's context.
+        """
+        with torch.no_grad():
+            deck_reprs = self.assemble_full_representations(deck_oids)
+            dummy_repr = deck_reprs.mean(dim=0)
+            
+            prompt_semantic_emb = torch.tensor(self.llm.encode(prompt), device=self.device)
+            
+            # The semantic embedding is at the end of the partial representation, the role embedding is right before it.
+            # full_repr = [stats, rarity, color, cmc, semantic, roles, types, keywords]
+            partial_dummy = dummy_repr[:-(self.cpr_model.feature_encoder.output_dim)]
+            
+            # Replace the semantic part of the partial dummy representation
+            numerical_and_roles = torch.cat([
+                partial_dummy[:-SEMANTIC_DIM], 
+                prompt_semantic_emb
+            ])
+
+            categorical_dummy = dummy_repr[-(self.cpr_model.feature_encoder.output_dim):]
+
+            dummy_full_repr = torch.cat([
+                numerical_and_roles,
+                categorical_dummy
+            ]).unsqueeze(0)
+
+            prompt_intent_embedding = self.cpr_model.card_embedding(dummy_full_repr).squeeze(0)
+
+        return prompt_intent_embedding
 
 
 def build_color_subset_filter(colors):
@@ -251,7 +230,6 @@ def build_color_subset_filter(colors):
     # print(f"allowed colors: {allowed_subsets}")
 
     # Format each subset into the delimited string format used in the DB
-    # Example: ['U', 'W'] -> ",U,W,"
     formatted_subsets = []
     for subset in allowed_subsets:
         formatted_string = f",{','.join(subset)},"
@@ -259,6 +237,123 @@ def build_color_subset_filter(colors):
     
     or_conditions = [{"color_identity": {"$eq": s}} for s in formatted_subsets]
     return {"$or": or_conditions}
+
+
+# def create_card_representation(oid, partial_map, cat_map, feature_encoder):
+#     """
+#     creates and returns a complete card representation for a single card
+#     """
+#     card_types, card_keyw = cat_map[oid].values()
+#     card_types = card_types.unsqueeze(0).cpu()
+#     card_keyw = card_keyw.unsqueeze(0).cpu()
+#     cat_embeddings = feature_encoder(card_types, card_keyw).squeeze(0)
+#     partial_tensor = partial_map[oid].cpu()
+#     final_tensor = torch.cat((partial_tensor, cat_embeddings)).cpu()
+#     return final_tensor
+
+
+def process_deck_for_search(deck_id: int, embedder: CardEmbedder, client=None, db_name=None):
+    """
+    Given a deck id, returns its embedding and its colors using the CardEmbedder class.
+    """
+    deck = edh_scraper.archidekt_fetch_deck(deck_id, known_ids=embedder.all_known_ids)
+    if not deck:
+        print(f"Could not fetch or process deck with ID: {deck_id}")
+        return None, None, None
+    
+    decklist_ids = [oid for oid in (deck.commander_ids + deck.mainboard_ids) if oid in embedder.all_known_ids]
+    if not decklist_ids:
+        print("Deck contains no known cards.")
+        return None, None, None
+
+    deck_emb_tensor = embedder.get_deck_embedding(decklist_ids)
+    deck_emb_list = deck_emb_tensor.cpu().tolist()
+    
+    deck_colors = set()
+    if client and db_name:
+        card_collection = client.get_collection(name=db_name)
+        results = card_collection.get(ids=decklist_ids, include=["metadatas"])
+        if results and results.get("metadatas"):
+            for metadata in results['metadatas']:
+                color_str = metadata.get("color_identity", ",")
+                card_colors = [color for color in color_str.strip(',').split(',') if color]
+                deck_colors.update(card_colors)
+
+    return decklist_ids, deck_emb_list, list(sorted(deck_colors))
+
+
+def recommend_cards(querry_embedding, n:int, colors=None, client=None, db_name=None):
+    """
+    Takes a deck embedding and returns the top N recommended cards, optionally filtered by color.
+    """
+    if client is None:
+        print("Please provide a client.")
+        return []
+    if db_name is None:
+        print("Please provide database name.")
+        return []
+
+    card_collection = client.get_collection(name=db_name)
+    if not card_collection:
+        print("Client is not available.")
+        return None, None
+
+    filter_metadata = {}
+    if colors:
+        filter_metadata = build_color_subset_filter(colors)
+    
+    try:
+        results = card_collection.query(
+            query_embeddings=[querry_embedding],
+            n_results=n,
+            where=filter_metadata if filter_metadata else None
+        )
+
+        card_names = []
+        if results and results['ids'][0]:
+            for metadata in results['metadatas'][0]:
+                card_names.append(metadata.get("name", "Unknown Name"))
+        
+        return card_names
+
+    except Exception as e:
+        print(f"An error occurred during ChromaDB query: {e}")
+        return []
+
+
+def recommend_cards_with_prompt(
+    deck_id: int,
+    prompt: str,
+    n: int,
+    embedder: CardEmbedder,
+    client: chromadb.Client,
+    db_name: str,
+    alpha: float = 0.7
+):
+    """
+    Main orchestrator for prompt-based recommendations using the CardEmbedder.
+    """
+    print(f"--- Generating recommendations for deck {deck_id} with prompt: '{prompt}' ---")
+
+    deck_oids, deck_emb_list, deck_colors = process_deck_for_search(deck_id, embedder, client, db_name)
+    if deck_emb_list is None:
+        return []
+    prompt_intent_emb = embedder.get_prompt_hypothetical_embedding(prompt, deck_oids)
+    deck_emb = torch.tensor(deck_emb_list, device=embedder.device)
+
+    final_query_emb = F.normalize(
+        (1 - alpha) * deck_emb + alpha * prompt_intent_emb,
+        p=2, dim=0
+    )
+
+    print("Querying database with guided vector...")
+    return recommend_cards(
+        deck_embedding=final_query_emb.cpu().tolist(),
+        n=n,
+        colors=deck_colors,
+        client=client,
+        db_name=db_name
+    )
 
 
 
