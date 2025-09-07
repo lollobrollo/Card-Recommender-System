@@ -1,7 +1,12 @@
+# chromadb docs 
+# https://cookbook.chromadb.dev/core/filters/
+# https://docs.trychroma.com/docs/overview/introduction
+
 import chromadb
 import torch
 from tqdm import tqdm
 import models
+from train import load_card_encoder
 import json
 import ijson
 import os
@@ -11,46 +16,42 @@ import utils
 from more_itertools import chunked
 from itertools import combinations
 
-def build_and_save_chroma_db(card_feature_map_path, embedder_checkpoint_path, cards_metadata_path, client, db_name):
+def build_and_save_chroma_db(card_to_embedding_path, cards_metadata_path, client, db_name):
     """
-    Loads card features, generates embeddings using a trained model and saves them into a persistent ChromaDB database
+    Loads card features, generates embeddings using a trained model and saves them into a persistent ChromaDB database.
     """
     print("--- Building the Card Vector Database ---")
-    
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if not os.path.exists(card_feature_map_path):
-        print(f"Card feature map not found at '{card_feature_map_path}'"); return
-    card_feature_map = torch.load(card_feature_map_path)
+    if not os.path.exists(card_to_embedding_path):
+        print(f"Card to embedding mapping not found at '{card_to_embedding_path}'"); return
+    card_emb_map = torch.load(card_to_embedding_path, weights_only = False)
 
-    card_encoder = load_card_encoder(embedder_checkpoint_path, device)
-    
     print(f"Initializing persistent ChromaDB.")
     card_collection = client.get_or_create_collection(name=db_name)
     
-    card_metadata_map = build_metadata_map(cards_metadata_path, card_feature_map)
+    card_metadata_map = build_metadata_map(cards_metadata_path, card_emb_map.keys())
 
-    print("Generating embeddings for all cards...")
+    print("Preparing metadata for all cards...")
     all_ids = []
     all_embeddings = []
     all_metadatas = []
 
     with torch.no_grad():
-        for oracle_id, feature_tensor in tqdm(card_feature_map.items(), desc="Encoding cards"):
-            # Model expects a batch -> add a batch dimension with unsqueeze(0)
-            feature_tensor = feature_tensor.unsqueeze(0).to(device)
-            embedding_tensor = card_encoder.card_embedding(feature_tensor).squeeze(0)
-            embedding = embedding_tensor.cpu().tolist()
+        for oracle_id, embedding in card_emb_map.items():
             all_ids.append(oracle_id)
-            all_embeddings.append(embedding)
+            all_embeddings.append(embedding.tolist())
             metadata = card_metadata_map.get(oracle_id, {})
             all_metadatas.append(metadata)
-
+    
+    chunk_size = 5000
+    num_batches = len(all_ids) // chunk_size + bool(len(all_ids)%chunk_size)
     print(f"Adding {len(all_ids)} cards to the ChromaDB collection...")
-    for batch_ids, batch_embs, batch_meta in zip(
-        chunked(all_ids, 5000),
-        chunked(all_embeddings, 5000),
-        chunked(all_metadatas, 5000)
+    for batch_ids, batch_embs, batch_meta in tqdm(zip(
+        chunked(all_ids, chunk_size),
+        chunked(all_embeddings, chunk_size),
+        chunked(all_metadatas, chunk_size)), total=num_batches
     ): # chunking since max batch size for collection.add() is 5461
         card_collection.add(
             ids=batch_ids,
@@ -59,15 +60,6 @@ def build_and_save_chroma_db(card_feature_map_path, embedder_checkpoint_path, ca
         )
     print(f"Vector database has been built and saved.")
     print(f"Total cards in collection: {card_collection.count()}")
-
-
-def load_card_encoder(path, device):
-    checkpoint = torch.load(path, weights_only=False)
-    model = models.PipelineCPR()
-    model.load_state_dict(checkpoint['model_state_dict']) 
-    model.to(device)
-    model.eval()
-    return model
 
 
 def format_list_for_chroma(data: list) -> str:
@@ -81,14 +73,14 @@ def format_list_for_chroma(data: list) -> str:
     return f",{','.join(data)},"
 
 
-def build_metadata_map(clean_data_path, card_feature_map):
+def build_metadata_map(clean_data_path, all_oracle_ids):
     """
     Builds a dictionary mapping oracle_id to its clean, filter-ready metadata
     """
     print("Generating cards metadata map... ", end = "")
     card_metadata_map = {}
     with open(clean_data_path, 'r', encoding='utf-8') as f:
-        mapped_ids = set(card_feature_map.keys())
+        mapped_ids = set(all_oracle_ids)
 
         for card in ijson.items(f, "item"):
             oracle_id = card.get("oracle_id")
@@ -122,16 +114,32 @@ def build_metadata_map(clean_data_path, card_feature_map):
     return card_metadata_map
 
 
+
 # - - - - - - - - - - - - - Card Search - - - - - - - - - - - - -
 
 
-def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint_path:str, client=None, db_name=None):
+def create_card_representation(oid, partial_map, cat_map, feature_encoder):
+    """
+    creates and returns a complete card representation for a single card
+    """
+    card_types, card_keyw = cat_map[oid].values()
+    card_types = card_types.unsqueeze(0).cpu()
+    card_keyw = card_keyw.unsqueeze(0).cpu()
+    cat_embeddings = feature_encoder(card_types, card_keyw).squeeze(0)
+    partial_tensor = partial_map[oid].cpu()
+    final_tensor = torch.cat((partial_tensor, cat_embeddings)).cpu()
+    return final_tensor
+
+
+def process_deck_for_search(deck_id, partial_repr_dict, cat_repr_dict_path, embedder_checkpoint_path, num_types, num_keyw, client=None, db_name=None):
     """
     Given a deck id, returns its embedding and its colors
     """
-    repr_dict = torch.load(repr_dict_path, weights_only = False)
+    partial_repr_dict = torch.load(partial_repr_dict, weights_only = False)
+    type_keyw_dict = torch.load(cat_repr_dict_path, weights_only = False)
 
-    deck = edh_scraper.archidekt_fetch_deck(deck_id, known_ids=set(repr_dict.keys()))
+    all_known_ids = set(partial_repr_dict.keys())
+    deck = edh_scraper.archidekt_fetch_deck(deck_id, known_ids=all_known_ids)
     if not deck:
         print(f"Could not fetch or process deck with ID: {deck_id}")
         return None, None
@@ -139,12 +147,17 @@ def process_deck_for_search(deck_id:int, repr_dict_path:str, embedder_checkpoint
     decklist_ids = deck.commander_ids + deck.mainboard_ids
     assert type(decklist_ids) == list
 
-    repr_decklist = [repr_dict[o_id] for o_id in decklist_ids]
+    model = load_card_encoder(embedder_checkpoint_path, num_types, num_keyw, torch.device("cpu"))
 
-    model = models.PipelineCPR()
-    checkpoint = torch.load(embedder_checkpoint_path, weights_only = False)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.cpu().eval()
+    repr_decklist = []
+    for oid in decklist_ids:
+        card_repr = create_card_representation(oid, partial_repr_dict, type_keyw_dict, model.feature_encoder)
+        repr_decklist.append(card_repr)
+
+    if not repr_decklist:
+        print("Deck contains no known cards.")
+        return None, None
+
     # Model expects a batch -> add a batch dimension with unsqueeze(0)
     deck_tensor = torch.stack(repr_decklist).unsqueeze(0)
     with torch.no_grad():
@@ -198,6 +211,7 @@ def recommend_cards(deck_embedding:list, n:int, colors=None, client=None, db_nam
     filter_metadata = {}
     if colors:
         filter_metadata = build_color_subset_filter(colors)
+    
     try:
         results = card_collection.query(
             query_embeddings=[deck_embedding],
@@ -233,7 +247,7 @@ def build_color_subset_filter(colors):
                 # if processing empty subset, add "C" for colorless
                 allowed_subsets.append(['C'])
             elif 'C' not in subset: # Check wether 'C' was inside original color_list and is getting coupled with other colors
-                allowed_subsets.append(list(subset))
+                allowed_subsets.append(sorted(list(subset)))
     # print(f"allowed colors: {allowed_subsets}")
 
     # Format each subset into the delimited string format used in the DB
@@ -251,13 +265,17 @@ def build_color_subset_filter(colors):
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
     db_path = os.path.join(this, "card_db")
-    feature_map = os.path.join(this, "data", "card_repr_dict_v1.pt")
-    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div.pt")
+    card_emb_path = os.path.join(this, "data", "emb_dict_v1_all_20_3.pt")
     cards_metadata = os.path.join(this, "data", "clean_data.json")
-    db_name = "mtg_cards_v1_div"
+    db_name = "mtg_cards_v1_all_20_3"
 
     client = chromadb.PersistentClient(path=db_path)
-    build_and_save_chroma_db(feature_map, embedder_checkpoint_path, cards_metadata, client, db_name)
+    build_and_save_chroma_db(card_emb_path, cards_metadata, client, db_name)
+
+
+    card_emb_path = os.path.join(this, "data", "emb_dict_v1_all_200_3.pt")
+    db_name = "mtg_cards_v1_all_200_3"
+    build_and_save_chroma_db(card_emb_path, cards_metadata, client, db_name)
 
     # rielle_id = 11032857
     # repr_dict_path = os.path.join(this, "data", "card_repr_dict_v1.pt")
