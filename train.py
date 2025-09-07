@@ -90,7 +90,39 @@ def autoencoder_step_fn(model, batch, loss_fn, device):
     return loss
 
 
-# - - - - - - - - - - - - - - - - - Models for contextual preference ranking pipeline - - - - - - - - - - - - - - - - - 
+def main_autoencoder_training(this):
+    ## TRAINING IMAGE AUTOENCODER
+    ae_dataset_path = os.path.join(this, "data", "img_dataset.pt")
+    ae_checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+
+    ## TRAINING WITH FIRST FUNCTION I CAME UP WITH
+    train_and_save_convAE(ae_dataset_path, ae_checkpoint_path)
+
+    ## TRAINING WITH GENERALIZED CLASS
+    NUM_EPOCHS = 10
+    LEARNING_RATE = 1e-3
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    ae_model = models.HybridConvAutoencoder().to(DEVICE)
+    ae_loss_fn = nn.MSELoss()
+    ae_optimizer = optim.Adam(ae_model.parameters(), lr=LEARNING_RATE)
+    
+    ae_full_dataset = torch.load(ae_dataset_path) # Img encoder wants to overfit to available images
+    data_loader_ae = DataLoader(train_ds_ae, batch_size=8, shuffle=True)
+
+    trainer_ae = Trainer(
+        model=ae_model,
+        optimizer=ae_optimizer,
+        loss_fn=ae_loss_fn,
+        train_loader=train_loader_ae,
+        val_loader=None,
+        checkpoint_path=ae_checkpoint_path,
+        device=DEVICE
+    )
+    trainer_ae.train(NUM_EPOCHS, train_step_fn=autoencoder_step_fn)
+
+
+# - - - - - - - - - - - - - - - - - Functions for contextual preference ranking pipeline - - - - - - - - - - - - - - - - - 
 
 
 class Trainer:
@@ -197,7 +229,7 @@ class Trainer:
         print("\n--- Training Finished ---")
 
 
-def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5, eps=1e-6):
+def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5):
     """
     Distance-weighted negative sampling step function for triplet loss.
     This function integrates the FeatureEncoder to create complete card representations before feeding them to the main encoders.
@@ -214,21 +246,23 @@ def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5, eps=1e-6
     pos_cat_emb = model.feature_encoder(pos_types, pos_keyw)
 
     # (B, Seq_Len, Num_Features) + (B, Seq_Len, Cat_Emb_Dim) -> (B, Seq_Len, Total_Dim)
-    anchor_decks_full = torch.cat((anchor_decks, anchor_cat_emb), dim=2)
+    anchor_full = torch.cat((anchor_decks, anchor_cat_emb), dim=2)
     # (B, Num_Features) + (B, Cat_Emb_Dim) -> (B, Total_Dim)
-    positive_cards_full = torch.cat((positive_cards, pos_cat_emb), dim=1)
+    positive_full = torch.cat((positive_cards, pos_cat_emb), dim=1)
     
-    anchor_emb = model.deck_embedding(anchor_decks_full)
-    pos_emb = model.card_embedding(positive_cards_full)
+    anchor_emb = model.deck_embedding(anchor_full)
+    pos_emb = model.card_embedding(positive_full)
 
-    B = anchor_decks_full.size(0)
-    dists = torch.cdist(anchor_emb, pos_emb, p=2) + eps
+    anchor_emb = F.normalize(anchor_emb, dim=1)
+    pos_emb = F.normalize(pos_emb, dim=1)
+
+    B = anchor_full.size(0)
+    sims = torch.matmul(anchor_emb, pos_emb.T)
     mask = torch.eye(B, dtype=torch.bool, device=device)
-    dists.masked_fill_(mask, float('inf'))
+    sims.masked_fill_(mask, float('-inf'))       # ignore self-similarity
 
     # Sample a negative based on distance-weighted probability
-    weights = torch.exp(-dists / temperature)
-    weights = weights / (weights.sum(dim=1, keepdim=True) + eps)
+    weights = F.softmax(sims / temperature, dim=1)
     neg_indices = torch.multinomial(weights, num_samples=1).squeeze(1)
     neg_emb = pos_emb[neg_indices]
 
@@ -236,59 +270,59 @@ def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5, eps=1e-6
     return loss
 
 
-
-
-if __name__ == "__main__":
-    this = os.path.dirname(__file__)
-
+def cpr_step_fn_infonce(model, batch, loss_fn, device, temperature=0.5):
     """
-    ## TRAINING IMAGE AUTOENCODER
-    ae_dataset_path = os.path.join(this, "data", "img_dataset.pt")
-    ae_checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
-
-    ## TRAINING WITH FIRST FUNCTION I CAME UP WITH
-    train_and_save_convAE(ae_dataset_path, ae_checkpoint_path)
-
-    ## TRAINING WITH GENERALIZED CLASS
-    NUM_EPOCHS = 10
-    LEARNING_RATE = 1e-3
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    ae_model = models.HybridConvAutoencoder().to(DEVICE)
-    ae_loss_fn = nn.MSELoss()
-    ae_optimizer = optim.Adam(ae_model.parameters(), lr=LEARNING_RATE)
-    
-    ae_full_dataset = torch.load(ae_dataset_path) # Img encoder wants to overfit to available images
-    data_loader_ae = DataLoader(train_ds_ae, batch_size=8, shuffle=True)
-
-    trainer_ae = Trainer(
-        model=ae_model,
-        optimizer=ae_optimizer,
-        loss_fn=ae_loss_fn,
-        train_loader=train_loader_ae,
-        val_loader=None,
-        checkpoint_path=ae_checkpoint_path,
-        device=DEVICE
-    )
-    trainer_ae.train(NUM_EPOCHS, train_step_fn=autoencoder_step_fn)
+    InfoNCE loss step function using dot product for similarity without vector normalization.
+    This function integrates the FeatureEncoder to create complete card representations before feeding them to the main encoders.
+    It treats other positive cards in the batch as negative samples for contrastive learning.
     """
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    anchors, positives, anchor_types, anchor_keyw, pos_types, pos_keyw = batch
+    anchors, positives = anchors.to(device), positives.to(device)
+    anchor_types, anchor_keyw = anchor_types.to(device), anchor_keyw.to(device)
+    pos_types, pos_keyw = pos_types.to(device), pos_keyw.to(device)
 
+    # Encode categorical features
+    anchor_cat_emb = model.feature_encoder(anchor_types, anchor_keyw)   # (B, Seq_Len, cat_dim)
+    pos_cat_emb = model.feature_encoder(pos_types, pos_keyw)         # (B, cat_dim)
+
+    # Concatenate partial features + categorical features
+    anchor_full = torch.cat((anchors, anchor_cat_emb), dim=2)  # (B, Seq_Len, dim)
+    pos_full = torch.cat((positives, pos_cat_emb), dim=1)   # (B, dim)
+
+    # Get embeddings
+    anchor_emb = model.deck_embedding(anchor_full)  # (B, D)
+    pos_emb    = model.card_embedding(pos_full)     # (B, D)
+
+    # Normalize for cosine similarity
+    anchor_emb = F.normalize(anchor_emb, dim=1)
+    pos_emb = F.normalize(pos_emb, dim=1)
+
+    # Compute similarity matrix (B x B)
+    logits = torch.matmul(anchor_emb, pos_emb.T) / temperature
+
+    # Labels: each anchor i should match with its own positive i
+    labels = torch.arange(logits.size(0), device=device)
+
+    loss = loss_fn(logits, labels)
+    return loss
+
+
+
+def main_cpr_training(
+    cpr_dataset_path,
+    cpr_checkpoint_path,
+    loss_fn,
+    step_fn,
+    NUM_EPOCHS = 20,
+    LEARNING_RATE = 0.00002,
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    BATCH_SIZE = 128,
+    NUM_TYPES = 422,
+    NUM_KEYW = 627):
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
-    NUM_EPOCHS = 100
-    LEARNING_RATE = 0.00002
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 256
-    NUM_TYPES = 422
-    NUM_KEYW = 627
-
-
-    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_div.pt")
-    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div.pt")
 
     feature_encoder = models.FeatureEncoder(num_types=NUM_TYPES, type_emb_dim=64, num_keyw=NUM_KEYW, keyw_emb_dim=64) # TODO: check number of keywords and types
     cpr_model = models.PipelineCPR(feature_encoder, out_dim=512).to(DEVICE)
-    cpr_loss_fn = nn.TripletMarginLoss(margin=0.4) # TODO: change margin
     cpr_optimizer = optim.AdamW(cpr_model.parameters(), lr=LEARNING_RATE)
 
     cpr_full_dataset = torch.load(cpr_dataset_path, weights_only = False)
@@ -307,7 +341,7 @@ if __name__ == "__main__":
     trainer_cpr = Trainer(
         model=cpr_model,
         optimizer=cpr_optimizer,
-        loss_fn=cpr_loss_fn,
+        loss_fn=loss_fn,
         train_loader=train_loader_cpr,
         val_loader=val_loader_cpr,
         checkpoint_path=cpr_checkpoint_path,
@@ -315,4 +349,164 @@ if __name__ == "__main__":
         scheduler=cpr_scheduler
     )
 
-    trainer_cpr.train(NUM_EPOCHS, step_fn=cpr_step_fn_triplet)
+    trainer_cpr.train(NUM_EPOCHS, step_fn=step_fn)
+
+
+# - - - - - - - - - - - - - - - - - Auxiliary functions, post training - - - - - - - - - - - - - - - - - 
+
+
+def generate_and_save_emb_dict(card_feature_map_path, cat_feature_map_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, out_path):
+    """
+    Generates and saves a dictionary mapping oracle_ids to their respective embedding
+    """
+    if not os.path.exists(card_feature_map_path):
+        print(f"Card feature map not found at '{card_feature_map_path}'"); return
+    card_feature_map = torch.load(card_feature_map_path)
+
+    if not os.path.exists(cat_feature_map_path):
+        print(f"Card feature map not found at '{cat_feature_map_path}'"); return
+    cat_feature_map = torch.load(cat_feature_map_path) # made of items like  oracle_id: {"types": .., "keywords": ..}
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    card_encoder = load_card_encoder(cpr_checkpoint_path, num_types, num_keyw, device)
+
+
+    print("Preparing data for batching...")
+    oids_list = []
+    partial_tensors_list = []
+    types_list = []
+    keywords_list = []
+    for oid, partial_repr in card_feature_map.items():
+        oids_list.append(oid)
+        partial_tensors_list.append(partial_repr)
+        cat_data = cat_feature_map[oid]
+        types_list.append(cat_data["types"])
+        keywords_list.append(cat_data["keywords"])
+
+    cards_embeddings = {}
+    with torch.no_grad():
+        for i in tqdm(range(0, len(oids_list), batch_size), desc="Creating embeddings for all cards"):
+            batch_oids = oids_list[i:i+batch_size]
+            batch_partials = partial_tensors_list[i:i+batch_size]
+            batch_types = types_list[i:i+batch_size]
+            batch_keywords = keywords_list[i:i+batch_size]
+
+            partials_tensor = torch.stack(batch_partials).to(device)
+            types_tensor = torch.stack(batch_types).to(device)
+            keywords_tensor = torch.stack(batch_keywords).to(device)
+            
+            cat_embeddings = card_encoder.feature_encoder(types_tensor, keywords_tensor)
+            full_card_repr = torch.cat([partials_tensor, cat_embeddings], dim=1)
+            
+            batch_embeddings = card_encoder.card_embedding(full_card_repr)
+            
+            for oid, emb in zip(batch_oids, batch_embeddings):
+                cards_embeddings[oid] = emb.cpu()
+    
+    torch.save(cards_embeddings, out_path)
+    print(f"Successfully created card embedding mapping in {out_path}")
+
+
+def load_card_encoder(path, num_types, num_keywords, device):
+    """
+    Initializes the PipelineCPR model with its required parameters
+    before loading the saved state dictionary.
+    """
+    feature_encoder = models.FeatureEncoder(
+        num_types=num_types,
+        type_emb_dim=64,
+        num_keyw=num_keywords,
+        keyw_emb_dim=64
+    )
+    model = models.PipelineCPR(
+        feature_encoder=feature_encoder,
+        partial_card_dim=797, 
+        card_hidden_dim=1024,
+        embed_dim=512,
+        out_dim=512
+    ).to(device)
+
+    checkpoint = torch.load(path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    model.eval()
+    return model
+
+
+
+
+if __name__ == "__main__":
+    
+    this = os.path.dirname(__file__)
+    data_dir = os.path.join(this, "data")
+
+    # main_autoencoder_training(this)
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    
+    # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_div.pt")
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_3.pt")
+    # NUM_EPOCHS = 20
+    # loss_fn = nn.TripletMarginLoss(margin=0.3) # TODO: try different values for margin
+    # step_fn = cpr_step_fn_triplet
+    # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_div.pt")
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_nce.pt")
+    # NUM_EPOCHS = 20
+    # loss_fn = nn.CrossEntropyLoss()
+    # step_fn = cpr_step_fn_infonce
+    # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_div.pt")
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_200_nce.pt")
+    # NUM_EPOCHS = 200
+    # loss_fn = nn.CrossEntropyLoss()
+    # step_fn = cpr_step_fn_infonce
+    # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
+    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_20_nce.pt")
+    NUM_EPOCHS = 20
+    loss_fn = nn.CrossEntropyLoss()
+    step_fn = cpr_step_fn_infonce
+    main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
+    # NUM_EPOCHS = 200
+    # loss_fn = nn.CrossEntropyLoss()
+    # step_fn = cpr_step_fn_infonce
+    # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+    # num_types = 422 
+    # num_keyw = 627
+    # batch_size = 64 
+
+    # repr_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
+    # type_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
+    # emb_dict_path = os.path.join(data_dir, "emb_dict_v1_all_20_3.pt")
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_3.pt")
+    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_nce.pt")
+    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+
+    
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_200_nce.pt")
+    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+
+
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_20_nce.pt")
+    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+
+
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
+    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
