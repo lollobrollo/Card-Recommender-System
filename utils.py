@@ -10,7 +10,7 @@ import re
 import json
 
 
-def generate_and_save_dict():
+def generate_and_save_card_dict():
     """
     Using data/clean_data.json, builds a case-insensitive map from card name to oracle_id
     Filters out cards without an associated image in data/images
@@ -279,10 +279,15 @@ def parse_mana_cost(mana_cost_str: str) -> dict:
 
 
 
+
+
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
-    img_dir = os.path.join(this, "data", "images")
-    dataset_path = os.path.join(this, "data", "img_dataset.pt")
-    checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
-    generate_and_save_dict()
+    data_dir = os.path.join(this, "data")
+    # img_dir = os.path.join(data_dir, "images")
+    # dataset_path = os.path.join(data_dir, "img_dataset.pt")
+    # generate_and_save_card_dict()
     # save_dataset_to_pt(img_dir, dataset_path)
+
+    partial_data_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
+    type_and_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")

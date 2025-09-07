@@ -366,7 +366,7 @@ class FeatureEncoder(nn.Module):
     Takes integer indices for categorical features (types, keywords) and
     converts them into a single, dense, trainable feature vector.
     """
-    def __init__(self, num_types: int, type_emb_dim: int, num_keyw: int, keyw_emb_dim: int):  
+    def __init__(self, num_types:int=422, type_emb_dim:int=64, num_keyw:int=627, keyw_emb_dim:int=64):  
         super().__init__()
         # Tried with nn.Embedder with poor results
         self.type_projector = nn.Linear(num_types, type_emb_dim)
@@ -380,8 +380,11 @@ class FeatureEncoder(nn.Module):
         return torch.cat([type_emb, keyword_emb], dim=-1)
 
 
+
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
-    img_dir = os.path.join(this, "data", "images")
-    checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
-    show_reconstructions(checkpoint_path, img_dir)
+    # img_dir = os.path.join(this, "data", "images")
+    # checkpoint_path = os.path.join(this, "models", "ImgEncoder.pt")
+    # show_reconstructions(checkpoint_path, img_dir)
+
+    
