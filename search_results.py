@@ -75,30 +75,50 @@ def show_card_results(card_names, card_dict_path, image_folder, title):
 if __name__ == '__main__':
     this = os.path.dirname(__file__)
     data_dir = os.path.join(this, "data")
-    db_path = os.path.join(this, "card_db")
     repr_dict_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     type_keyw_dict_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
     embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_3.pt")
-    cards_metadata = os.path.join(data_dir, "clean_data.json")
+    mtg_llm_path = os.path.join(this, "models", "magic-distilbert-base-v1")
     card_dict_path = os.path.join(data_dir, "card_dict.pt")
     img_folder_path = os.path.join(data_dir, "images")
 
+    db_path = os.path.join(this, "card_db")
     client = chromadb.PersistentClient(path=db_path)
     db_name = "mtg_cards_v1_all_200_3"
     
+    num_types = 422
+    num_keyw = 627
+
+    embedder = vector_database.CardEmbedder(
+        device="cpu",
+        cpr_checkpoint_path=embedder_checkpoint_path,
+        partial_map_path=repr_dict_path,
+        cat_map_path=type_keyw_dict_path,
+        llm_path=mtg_llm_path,
+        num_types=num_types,
+        num_keywords=num_keyw
+    )
+
     rielle_id = 11032857
     animar_id = 5096356
     grismold_id = 9151052
 
-    num_types = 422
-    num_keyw = 627
+    user_prompt = "Find some efficient card draw spells"
 
-    deck_emb, deck_colors = vector_database.process_deck_for_search(grismold_id, repr_dict_path, type_keyw_dict_path, embedder_checkpoint_path, num_types, num_keyw, client, db_name)
-    results = vector_database.recommend_cards(deck_embedding=deck_emb, n=10, colors=None, client=client, db_name=db_name)
-
-    show_card_results(
-        card_names=results,
-        card_dict_path=card_dict_path,
-        image_folder=img_folder_path,
-        title=db_name
+    prompt_based_results = vector_database.recommend_cards_with_prompt(
+        deck_id=rielle_id,
+        prompt=user_prompt,
+        n=10,
+        embedder=embedder,
+        client=client,
+        db_name=db_name,
+        alpha=0.7
     )
+
+    if prompt_based_results:
+        show_card_results(
+            card_names=prompt_based_results,
+            card_dict_path=card_dict_path,
+            image_folder=img_folder_path,
+            title=f"Results for Prompt: '{user_prompt}'"
+        )

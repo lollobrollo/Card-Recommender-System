@@ -127,8 +127,8 @@ class CardEmbedder:
     An inference class to handle the creation of full card representations and embeddings.
     It loads all necessary models and data maps once for batched processing.
     """
-    def __init__(self, cpr_checkpoint_path, partial_map_path, cat_map_path, llm_path, num_types, num_keywords):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def __init__(self, device, cpr_checkpoint_path, partial_map_path, cat_map_path, llm_path, num_types, num_keywords):
+        self.device = device
         self.cpr_model = load_card_encoder(cpr_checkpoint_path, num_types, num_keywords, self.device)
         self.partial_map = torch.load(partial_map_path)
         self.cat_map = torch.load(cat_map_path)
@@ -282,7 +282,7 @@ def process_deck_for_search(deck_id: int, embedder: CardEmbedder, client=None, d
     return decklist_ids, deck_emb_list, list(sorted(deck_colors))
 
 
-def recommend_cards(querry_embedding, n:int, colors=None, client=None, db_name=None):
+def query_db(querry_embedding, n:int, colors=None, client=None, db_name=None):
     """
     Takes a deck embedding and returns the top N recommended cards, optionally filtered by color.
     """
@@ -323,32 +323,41 @@ def recommend_cards(querry_embedding, n:int, colors=None, client=None, db_name=N
 
 def recommend_cards_with_prompt(
     deck_id: int,
-    prompt: str,
     n: int,
     embedder: CardEmbedder,
     client: chromadb.Client,
     db_name: str,
+    prompt: str  = None,
     alpha: float = 0.7
 ):
     """
     Main orchestrator for prompt-based recommendations using the CardEmbedder.
     """
-    print(f"--- Generating recommendations for deck {deck_id} with prompt: '{prompt}' ---")
-
     deck_oids, deck_emb_list, deck_colors = process_deck_for_search(deck_id, embedder, client, db_name)
     if deck_emb_list is None:
+        print("Failed to process deck, no recommendation is possible.")
         return []
-    prompt_intent_emb = embedder.get_prompt_hypothetical_embedding(prompt, deck_oids)
-    deck_emb = torch.tensor(deck_emb_list, device=embedder.device)
 
-    final_query_emb = F.normalize(
-        (1 - alpha) * deck_emb + alpha * prompt_intent_emb,
-        p=2, dim=0
-    )
+    if prompt and prompt.strip():
+        print(f"--- Generating guided recommendations ---")
+        print(f"Prompt: '{prompt}' with influence alpha={alpha}")
 
-    print("Querying database with guided vector...")
-    return recommend_cards(
-        deck_embedding=final_query_emb.cpu().tolist(),
+        prompt_intent_emb = embedder.get_prompt_hypothetical_embedding(prompt, deck_oids)
+        deck_emb = torch.tensor(deck_emb_list, device=embedder.device)
+
+        final_query_tensor = F.normalize(
+            (1 - alpha) * deck_emb + alpha * prompt_intent_emb,
+            p=2, dim=0
+        )
+        final_query_emb = final_query_tensor.cpu().tolist()
+
+    else:
+        print(f"--- Generating synergy recommendations ---")
+        final_query_emb = deck_emb_list
+
+    print("Querying the database...")
+    return query_db(
+        deck_embedding=final_query_emb,
         n=n,
         colors=deck_colors,
         client=client,
