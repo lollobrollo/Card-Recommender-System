@@ -257,12 +257,12 @@ def cpr_step_fn_triplet(model, batch, loss_fn, device, temperature=0.5):
     pos_emb = F.normalize(pos_emb, dim=1)
 
     B = anchor_full.size(0)
-    sims = torch.matmul(anchor_emb, pos_emb.T)
+    sims = torch.matmul(anchor_emb, pos_emb.T) / temperature
     mask = torch.eye(B, dtype=torch.bool, device=device)
     sims.masked_fill_(mask, float('-inf'))       # ignore self-similarity
 
     # Sample a negative based on distance-weighted probability
-    weights = F.softmax(sims / temperature, dim=1)
+    weights = F.softmax(sims, dim=1)
     neg_indices = torch.multinomial(weights, num_samples=1).squeeze(1)
     neg_emb = pos_emb[neg_indices]
 
@@ -299,8 +299,6 @@ def cpr_step_fn_infonce(model, batch, loss_fn, device, temperature=0.5):
 
     # Compute similarity matrix (B x B)
     logits = torch.matmul(anchor_emb, pos_emb.T) / temperature
-
-    # Labels: each anchor i should match with its own positive i
     labels = torch.arange(logits.size(0), device=device)
 
     loss = loss_fn(logits, labels)
@@ -466,19 +464,19 @@ if __name__ == "__main__":
     # step_fn = cpr_step_fn_infonce
     # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
 
-    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
-    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_20_nce.pt")
-    NUM_EPOCHS = 20
-    loss_fn = nn.CrossEntropyLoss()
-    step_fn = cpr_step_fn_infonce
-    main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
-
     # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
-    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
-    # NUM_EPOCHS = 200
+    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_20_nce.pt")
+    # NUM_EPOCHS = 20
     # loss_fn = nn.CrossEntropyLoss()
     # step_fn = cpr_step_fn_infonce
     # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
+    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
+    NUM_EPOCHS = 200
+    loss_fn = nn.CrossEntropyLoss()
+    step_fn = cpr_step_fn_infonce
+    main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
