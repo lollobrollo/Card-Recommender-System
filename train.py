@@ -305,7 +305,6 @@ def cpr_step_fn_infonce(model, batch, loss_fn, device, temperature=0.5):
     return loss
 
 
-
 def main_cpr_training(
     cpr_dataset_path,
     cpr_checkpoint_path,
@@ -398,7 +397,7 @@ def generate_and_save_emb_dict(card_feature_map_path, cat_feature_map_path, cpr_
             full_card_repr = torch.cat([partials_tensor, cat_embeddings], dim=1)
             
             batch_embeddings = card_encoder.card_embedding(full_card_repr)
-            
+            batch_embeddings = F.normalize(batch_embeddings, p=2, dim=1) # normalize to improve swearch results
             for oid, emb in zip(batch_oids, batch_embeddings):
                 cards_embeddings[oid] = emb.cpu()
     
@@ -471,40 +470,28 @@ if __name__ == "__main__":
     # step_fn = cpr_step_fn_infonce
     # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
 
-    cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
-    cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
-    NUM_EPOCHS = 200
-    loss_fn = nn.CrossEntropyLoss()
-    step_fn = cpr_step_fn_infonce
-    main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
-
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-
-
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-    # num_types = 422 
-    # num_keyw = 627
-    # batch_size = 64 
-
-    # repr_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
-    # type_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
-    # emb_dict_path = os.path.join(data_dir, "emb_dict_v1_all_20_3.pt")
-    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_3.pt")
-    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
-
-    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_20_nce.pt")
-    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
-
-    
-    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_200_nce.pt")
-    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
-
-
-    # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_20_nce.pt")
-    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
-
-
+    # cpr_dataset_path = os.path.join(this, "data", "cpr_dataset_v1_all.pt")
     # cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_nce.pt")
-    # generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+    # NUM_EPOCHS = 200
+    # loss_fn = nn.CrossEntropyLoss()
+    # step_fn = cpr_step_fn_infonce
+    # main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, NUM_EPOCHS)
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+
+
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+    num_types = 422
+    num_keyw = 627
+    batch_size = 64
+
+    repr_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
+    type_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
+
+    emb_dict_paths = [os.path.join(this, "data", "emb_dict_v1_"+dataset+"_"+epochs+"_"+loss+".pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    cpr_checkpoint_paths = [os.path.join(this, "models", "cpr_checkpoint_v1_"+dataset+"_"+epochs+"_"+loss+".pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+
+    for emb_dict_path, cpr_checkpoint_path in zip(emb_dict_paths, cpr_checkpoint_paths):
+        generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)

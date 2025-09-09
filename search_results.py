@@ -8,15 +8,6 @@ import vector_database
 import chromadb
 
 
-def normalize_card_name(name: str) -> str:
-    """Normalizes a card name for consistent mapping."""
-    name = name.lower()
-    if ' // ' in name: name = name.split(' // ')[0]
-    import re
-    name = re.sub(r"[^\w\s]", '', name)
-    return name.strip()
-
-
 def show_card_results(card_names, card_dict_path, image_folder, title):
     """
     Displays the images of recommended cards in a grid.
@@ -45,8 +36,7 @@ def show_card_results(card_names, card_dict_path, image_folder, title):
     for i, card_name in enumerate(card_names):
         ax = axes[i]
         
-        norm_name = normalize_card_name(card_name)
-        oracle_id = name_to_id_map.get(norm_name)
+        oracle_id = name_to_id_map.get(card_name.lower())
 
         if oracle_id:
             img_path = os.path.join(image_folder, f"{oracle_id}.jpg")
@@ -77,17 +67,21 @@ if __name__ == '__main__':
     data_dir = os.path.join(this, "data")
     repr_dict_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     type_keyw_dict_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
-    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_3.pt")
-    mtg_llm_path = os.path.join(this, "models", "magic-distilbert-base-v1")
     card_dict_path = os.path.join(data_dir, "card_dict.pt")
     img_folder_path = os.path.join(data_dir, "images")
+    
+    models_dir = os.path.join(this, "models")
+    mtg_llm_path = os.path.join(models_dir, "magic-distilbert-base-v1") # embedder for oracle texts
+    role_class_path = os.path.join(models_dir, "card-role-classifier-final") # one-hot encoder for roles of cards
 
     db_path = os.path.join(this, "card_db")
     client = chromadb.PersistentClient(path=db_path)
-    db_name = "mtg_cards_v1_all_200_3"
     
     num_types = 422
     num_keyw = 627
+
+    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_200_3.pt")
+    db_name = "mtg_cards_v1_div_200_3"
 
     embedder = vector_database.CardEmbedder(
         device="cpu",
@@ -95,30 +89,40 @@ if __name__ == '__main__':
         partial_map_path=repr_dict_path,
         cat_map_path=type_keyw_dict_path,
         llm_path=mtg_llm_path,
+        role_class_path=role_class_path,
         num_types=num_types,
         num_keywords=num_keyw
+    )
+
+    retrieval_system = vector_database.CardRetriever(
+        embedder=embedder,
+        client=client,
+        card_dict_path=card_dict_path
     )
 
     rielle_id = 11032857
     animar_id = 5096356
     grismold_id = 9151052
 
-    user_prompt = "Find some efficient card draw spells"
+    user_prompt = ""
+    #user_prompt = "sacrifice a creature"
+    #user_prompt = "find some card draw"
+    #user_prompt = "draw a card"
+    #user_prompt = "deal damage to an opponent"
+    #user_prompt = "destroy target creature"
+    #user_prompt = "find some creature removal"
 
-    prompt_based_results = vector_database.recommend_cards_with_prompt(
-        deck_id=rielle_id,
-        prompt=user_prompt,
-        n=10,
-        embedder=embedder,
-        client=client,
+    prompt_based_results = retrieval_system.recommend_cards(
+        deck_id=animar_id,
         db_name=db_name,
-        alpha=0.7
+        prompt=user_prompt
     )
+
 
     if prompt_based_results:
         show_card_results(
             card_names=prompt_based_results,
             card_dict_path=card_dict_path,
             image_folder=img_folder_path,
-            title=f"Results for Prompt: '{user_prompt}'"
+            title=f"Results for Prompt: '{user_prompt}', using collection '{db_name}'"
         )

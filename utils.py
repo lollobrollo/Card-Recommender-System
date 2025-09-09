@@ -43,8 +43,9 @@ def generate_and_save_card_dict():
                 oracle_id = card.get('oracle_id')
                 # Only add the card if its oracle_id has a corresponding image
                 if oracle_id and oracle_id in available_image_ids:
-                    name = card.get('name').lower()
-                    card_dict[name] = oracle_id
+                    name = card.get('name',"").lower()
+                    if name:
+                        card_dict[name] = oracle_id
     except FileNotFoundError:
         print(f"Error: Clean data file not found at {json_path}")
         return
