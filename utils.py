@@ -179,72 +179,79 @@ def extract_card_types(card):
     return card_types_set
 
 
-def preprocess_oracle_text(text, card_name="", remove_reminder=True, mana_as_words=True, mask_name=True):
+def preprocess_text(text, card_name="", remove_reminder=True, mana_as_words=True, mask_name=True):
     """
-    Preprocess Oracle text for sentence encoding
+    Preprocess MRG-related text.
     Args:
-        text (str): The raw oracle text from Scryfall
-        remove_reminder (bool): If True, strips reminder text in parentheses (keywords encoded separately, could be redundant)
+        text (str): The raw oracle text
+        card_name (srt): name of the card, if any. Used to mask its istances in the card.
+        remove_reminder (bool): If True, strips reminder text in parentheses
         mana_as_words (bool): If True, replaces mana symbols like {G} with words ("green mana")
         mask_name (bool): If True, replace most istances of card self reference with a generic placeholder
-        card_name (srt): name of the card, used to mask its istances in the card
-    Returns:
-        str: The cleaned Oracle text.
     """
     if not text:
         return ""
 
-    # 1. Normalize newlines to separate abilities with a period + space
-    text = text.strip()
+    # Clean up repeated card name artifacts (which appear in EDHREC articles)
+    pattern = r'\b(.+?)\s+\1\b'
+    text = re.sub(pattern, r'\1', text)
+    # Normalize common punctuation
+    text = text.replace('“', '"').replace('”', '"')
+    text = text.replace('‘', "'").replace('’', "'")
+    text = text.replace('…', '...')
+
+    # Remove Emojis and other non-ASCII symbols
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "]+",
+        flags=re.UNICODE,
+    )
+    text = emoji_pattern.sub(r'', text)
+
+    # Normalize newlines and remove artifacts like the replacement character
+    text = text.strip().replace('�', '')
     text = re.sub(r"\s*\n\s*", ". ", text)
 
-    # 2. Remove reminder text (text inside parentheses)
+    # Remove reminder text
     if remove_reminder:
         text = re.sub(r"\([^)]*\)", "", text)
-
-    # 3. Replace mana symbols with words
+    # Convert mana cost symbols into words
     if mana_as_words:
         mana_map = {
-            "{W}": "white mana",
-            "{U}": "blue mana",
-            "{B}": "black mana",
-            "{R}": "red mana",
-            "{G}": "green mana",
-            "{C}": "colorless mana",
-            "{T}": "tap",
-            "{Q}": "untap"
+            "{W}": "white mana", "{U}": "blue mana", "{B}": "black mana",
+            "{R}": "red mana", "{G}": "green mana", "{C}": "colorless mana",
+            "{T}": "tap", "{Q}": "untap"
         }
-        # Add generic mana costs like {2}, {3}, etc.
         mana_map.update({f"{{{i}}}": f"{i} generic mana" for i in range(0, 21)})
         for symbol, replacement in mana_map.items():
             text = text.replace(symbol, replacement)
-
-    # 4. Replace card self references with placeholder
+    
+    # Mask card self references
     if mask_name:
         self_ref_phrases = [
             r'this card', r'this creature', r'this artifact', r'this enchantment',
             r'this planeswalker', r'this land', r'this permanent'
         ]
-        # Compile regex for self reference phrases (word boundaries + case insensitive)
         self_ref_regex = re.compile(r'\b(' + '|'.join(self_ref_phrases) + r')\b', flags=re.IGNORECASE)
-
         text = self_ref_regex.sub('[CARD]', text)
 
         if card_name and isinstance(card_name, str):
             name_to_mask = card_name.split(' // ')
-            for name in name_to_mask: # handles both names of double-faced cards if present
+            for name in name_to_mask:
                 card_name_pattern = re.escape(name)
                 card_name_regex = re.compile(rf'\b{card_name_pattern}\b', flags=re.IGNORECASE)
                 text = card_name_regex.sub('[CARD]', text)
-            
-    # 5. Normalize spaces
+    
+    # Final cleaning of spaces and punctuation
     text = re.sub(r"\s+", " ", text)
-
-    # 6. Trim leftover punctuation spacing
     text = re.sub(r"\s+([.,;:!?])", r"\1", text)
-    text = text.strip()
-
-    return text
+    return text.strip()
 
 
 def parse_mana_cost(mana_cost_str: str) -> dict:
@@ -277,8 +284,6 @@ def parse_mana_cost(mana_cost_str: str) -> dict:
         'generic': generic_mana,
         'x_cost': has_x_cost
     }
-
-
 
 
 

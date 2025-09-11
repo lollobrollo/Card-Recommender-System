@@ -15,36 +15,38 @@ from transformers import (
     pipeline
 )
 from datasets import load_dataset, Dataset
-import utils
+from utils import preprocess_text
 import re
-from more_itertools import chunked 
+from more_itertools import chunked
+import random
 
 
-# ROLE_LABELS = [
+# role_labels = [
 #     "artifact sinergy", "blink / flicker", "cloning / copying", "coin flip", "applying counters",
 #     "die roll", "enchantment sinergy", "enter the battlefield triggers", "exile",
 #     "extra combats", "face-down cards"]
 
-ROLE_LABELS = [
+role_labels = [
     "Card Draw / Advantage", "Tutor / Search", "Mana Ramp / Source", "Targeted Removal", "Board Wipe / Mass Removal",
     "Interaction / Counterspell", "Threat / Finisher", "Anthem / Power Amplification", "Token Generator",
     "Graveyard Recursion", "Sacrifice Outlet", "Stax / Tax Effect", "Theft / Steal", "Mill", "Discard", "Lifegain"
 ]
 
 class Paths:
-    CLEAN_DATA_JSON = "data/clean_data.json"
-    RULES_TXT = "data/mtg_rules.txt"
+    clean_data_json = "data/clean_data.json"
+    rules_txt = "data/mtg_rules.txt"
+    scraped_articles_txt = "data/scraped_articles.txt"
     # Stage 1 Output
-    FOUNDATION_MODEL = "models/magic-distilbert-base-v1"
+    fundation_model = "models/magic-distilbert-base-v1"
     # Stage 2 Output
-    PSEUDO_LABELED_DATASET = "data/card_roles_dataset.jsonl"
+    pseudo_labeled_dataset = "data/card_roles_dataset.jsonl"
     # Stage 3 Output
-    FINAL_CLASSIFIER = "models/card-role-classifier-final"
+    final_classifier = "models/card-role-classifier-final"
 
 # Hyperparameters
 class Config:
-    STAGE1_EPOCHS = 5
-    STAGE3_EPOCHS = 4
+    STAGE1_EPOCHS = 7
+    STAGE3_EPOCHS = 5
     BATCH_SIZE = 16
     LEARNING_RATE = 2e-5
     DISTILLATION_TEMP = 2.0 # Temperature for knowledge distillation
@@ -53,17 +55,9 @@ class Config:
 
 # STAGE 1: DOMAIN-ADAPTIVE PRE-TRAINING
 
-def extract_relevant_paragraphs(rules_text: str, min_words: int = 5):
+def extract_relevant_paragraphs(rules_text:str, min_words:int = 5):
     """
-    Parses the text of the MTG Comprehensive Rules and extracts only the
-    relevant paragraphs (detailed rules and glossary definitions)
-    Args:
-        rules_text (str): The full string content of the mtg_rules.txt file.
-        min_words (int): The minimum number of words a paragraph must have to be
-                         considered a "definition" if it's not a numbered rule.
-                         This filters out short, title-like lines.
-    Returns:
-        List[str]: A list of the cleaned, relevant rule and glossary paragraphs.
+    Parses the text of the MTG Comprehensive Rules and extracts only the relevant paragraphs (detailed rules and glossary definitions)
     """
     rule_pattern = re.compile(r'^\d{1,3}\.\d+')
     paragraphs = rules_text.split('\n\n')
@@ -89,24 +83,30 @@ def run_stage1_domain_pretraining():
     using Masked Language Modeling (MLM). This creates a "Magic Foundation Model".
     """
     print("\n--- STAGE 1: Domain-Adaptive Pre-training (MLM) ---")
-    if os.path.exists(Paths.FOUNDATION_MODEL):
-        print(f"Foundation model already found at '{Paths.FOUNDATION_MODEL}'. Skipping stage 1.")
+    if os.path.exists(Paths.fundation_model):
+        print(f"Foundation model already found at '{Paths.fundation_model}'. Skipping stage 1.")
         return
-    if not os.path.exists(Paths.RULES_TXT) or not os.path.exists(Paths.CLEAN_DATA_JSON):
+    if not os.path.exists(Paths.rules_txt) or not os.path.exists(Paths.clean_data_json):
         print("Missing required data files (rules.txt or clean_data.json). Cannot proceed.")
         return
     
     all_texts = []
-    with open(Paths.RULES_TXT, 'r', encoding='utf-8') as f:
+    with open(Paths.rules_txt, "r", encoding="utf-8") as f:
         rules_content = f.read()
-        all_texts.extend(extract_relevant_paragraphs(rules_content))
+        relevant_paragraphs = extract_relevant_paragraphs(rules_content)
+        all_texts.extend([preprocess_text(text, mask_name=False) for text in relevant_paragraphs])
 
-    with open(Paths.CLEAN_DATA_JSON, 'r', encoding='utf-8') as f:
+    with open(Paths.clean_data_json, "r", encoding="utf-8") as f:
         for card in ijson.items(f, "item"):
-            text = utils.preprocess_oracle_text(text=card.get("oracle_text", ""), card_name=card.get("name", ""))
+            text = preprocess_text(text=card.get("oracle_text", ""), card_name=card.get("name", ""))
             if text:
                 all_texts.append(text)
-    
+
+    with open(Paths.scraped_articles_txt, "r", encoding="utf-8") as f:
+        scraped_lines = [preprocess_text(line.strip(), mask_name=False) for line in f if line.strip()]
+        all_texts.extend(scraped_lines)
+    random.shuffle(all_texts)
+
     print(f"Created a corpus of {len(all_texts)} text documents.")
     hf_dataset = Dataset.from_dict({"text": all_texts})
 
@@ -134,7 +134,7 @@ def run_stage1_domain_pretraining():
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm_probability=0.15)
 
     training_args = TrainingArguments(
-        output_dir=f"{Paths.FOUNDATION_MODEL}_trainer_output",
+        output_dir=f"{Paths.fundation_model}_trainer_output",
         learning_rate=Config.LEARNING_RATE,
         per_device_train_batch_size=Config.BATCH_SIZE,
         num_train_epochs=Config.STAGE1_EPOCHS,
@@ -150,9 +150,9 @@ def run_stage1_domain_pretraining():
     print("Starting MLM fine-tuning...")
     trainer.train()
 
-    print(f"Saving foundation model to '{Paths.FOUNDATION_MODEL}'...")
-    model.save_pretrained(Paths.FOUNDATION_MODEL)
-    tokenizer.save_pretrained(Paths.FOUNDATION_MODEL)
+    print(f"Saving foundation model to '{Paths.fundation_model}'...")
+    model.save_pretrained(Paths.fundation_model)
+    tokenizer.save_pretrained(Paths.fundation_model)
 
 
 # STAGE 2: ZERO-SHOT PSEUDO-LABELING
@@ -163,8 +163,8 @@ def run_stage2_zero_shot_labeling():
     role probabilities, creating a dataset for the next stage.
     """
     print("\n--- STAGE 2: Zero-Shot Pseudo-Labeling ---")
-    if os.path.exists(Paths.PSEUDO_LABELED_DATASET):
-        print(f"Pseudo-labeled dataset already found at '{Paths.PSEUDO_LABELED_DATASET}'. Skipping stage 2.")
+    if os.path.exists(Paths.pseudo_labeled_dataset):
+        print(f"Pseudo-labeled dataset already found at '{Paths.pseudo_labeled_dataset}'. Skipping stage 2.")
         return
 
     print("Initializing Zero-Shot Classification Pipeline with custom Magic model...")
@@ -175,10 +175,10 @@ def run_stage2_zero_shot_labeling():
     )
 
     texts_dict = {}
-    with open(Paths.CLEAN_DATA_JSON, 'r', encoding='utf-8') as f:
+    with open(Paths.clean_data_json, 'r', encoding='utf-8') as f:
         for card in ijson.items(f, "item"):
             oid = card.get("oracle_id", "")
-            text = utils.preprocess_oracle_text(card.get('oracle_text', ""), card.get("name", ""))
+            text = preprocess_text(text=card.get('oracle_text', ""), card_name=card.get("name", ""))
             if oid and text: # check after processing the text
                 texts_dict[oid] = text
 
@@ -187,13 +187,13 @@ def run_stage2_zero_shot_labeling():
     batch_size = 16
     total_iterations = len(items) // batch_size + bool(len(items) % batch_size)
 
-    print(f"Classifying {len(items)} cards against {len(ROLE_LABELS)} roles in batches of {batch_size}...")
-    with open(Paths.PSEUDO_LABELED_DATASET, 'w', encoding='utf-8') as f_out:
+    print(f"Classifying {len(items)} cards against {len(role_labels)} roles in batches of {batch_size}...")
+    with open(Paths.pseudo_labeled_dataset, 'w', encoding='utf-8') as f_out:
         for batch in tqdm(chunked(items, batch_size), total=total_iterations, desc="Generating Pseudo-Labels"):
             batch_texts = [item[1] for item in batch]
             batch_results = classifier(
                 batch_texts, 
-                candidate_labels=ROLE_LABELS, 
+                candidate_labels=role_labels, 
                 hypothesis_template=magic_template, 
                 multi_label=True
             )
@@ -215,7 +215,7 @@ def run_stage2_zero_shot_labeling():
                         "scores": role_scores
                     }) + '\n')
 
-    print(f"Pseudo-labeled dataset saved to '{Paths.PSEUDO_LABELED_DATASET}'.")
+    print(f"Pseudo-labeled dataset saved to '{Paths.pseudo_labeled_dataset}'.")
 
 
 # STAGE 3: SUPERVISED FINE-TUNING (DISTILLATION)
@@ -232,7 +232,7 @@ class DistillationTrainer(Trainer):
         soft_teacher_probs = F.softmax(teacher_probs / Config.DISTILLATION_TEMP, dim=-1) # idea: diminish teacher overconfidence
         distill_loss = nn.KLDivLoss(reduction="batchmean")(soft_student_log_probs, soft_teacher_probs)
 
-        # BCE on teacher-provided scores (thresholded)
+        # BCE on teacher-provided scores 
         hard_loss = F.binary_cross_entropy_with_logits(student_logits, teacher_probs)
 
         loss = Config.ALPHA * distill_loss + (1 - Config.ALPHA) * hard_loss
@@ -245,24 +245,24 @@ def run_stage3_supervised_finetuning():
     using knowledge distillation to create the final, expert Card Role Classifier.
     """
     print("\n--- STAGE 3: Supervised Fine-Tuning (Knowledge Distillation) ---")
-    if os.path.exists(Paths.FINAL_CLASSIFIER):
-        print(f"Final classifier already found at '{Paths.FINAL_CLASSIFIER}'. Skipping stage 3.")
+    if os.path.exists(Paths.final_classifier):
+        print(f"Final classifier already found at '{Paths.final_classifier}'. Skipping stage 3.")
         return
 
-    hf_dataset = load_dataset('json', data_files=Paths.PSEUDO_LABELED_DATASET, split='train')
+    hf_dataset = load_dataset('json', data_files=Paths.pseudo_labeled_dataset, split='train')
     
-    tokenizer = AutoTokenizer.from_pretrained(Paths.FOUNDATION_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(Paths.fundation_model)
     student_model = AutoModelForSequenceClassification.from_pretrained(
-        Paths.FOUNDATION_MODEL,
-        num_labels=len(ROLE_LABELS),
+        Paths.fundation_model,
+        num_labels=len(role_labels),
         problem_type="multi_label_classification"
     )
 
     def preprocess_function(examples):
         tokenized = tokenizer(examples["text"], truncation=True, padding="max_length")
-        labels = torch.zeros(len(examples['text']), len(ROLE_LABELS))
+        labels = torch.zeros(len(examples['text']), len(role_labels))
         for i, scores in enumerate(examples['scores']):
-            for j, role in enumerate(ROLE_LABELS):
+            for j, role in enumerate(role_labels):
                 labels[i, j] = scores.get(role, 0.0)
         tokenized['labels'] = labels
         return tokenized
@@ -270,7 +270,7 @@ def run_stage3_supervised_finetuning():
     tokenized_dataset = hf_dataset.map(preprocess_function, batched=True, remove_columns=['scores', 'oracle_id', 'text'])
 
     training_args = TrainingArguments(
-        output_dir=f"{Paths.FINAL_CLASSIFIER}_trainer_output",
+        output_dir=f"{Paths.final_classifier}_trainer_output",
         learning_rate=Config.LEARNING_RATE,
         per_device_train_batch_size=Config.BATCH_SIZE,
         num_train_epochs=Config.STAGE3_EPOCHS,
@@ -284,9 +284,9 @@ def run_stage3_supervised_finetuning():
     print("Starting fine-tuning with knowledge distillation...")
     trainer.train()
 
-    print(f"Saving final card role classifier to '{Paths.FINAL_CLASSIFIER}'...")
-    student_model.save_pretrained(Paths.FINAL_CLASSIFIER)
-    tokenizer.save_pretrained(Paths.FINAL_CLASSIFIER)
+    print(f"Saving final card role classifier to '{Paths.final_classifier}'...")
+    student_model.save_pretrained(Paths.final_classifier)
+    tokenizer.save_pretrained(Paths.final_classifier)
 
 
 
@@ -299,14 +299,15 @@ def main():
     run_stage3_supervised_finetuning()
     
     print("\n\n--- Pipeline Finished Successfully ---")
-    print(f"Card role classifier is saved at: '{Paths.FINAL_CLASSIFIER}'")
+    print(f"Card role classifier is saved at: '{Paths.final_classifier}'")
 
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
-    Paths.CLEAN_DATA_JSON = os.path.join(this, "data", "clean_data.json")
-    Paths.RULES_TXT =  os.path.join(this, "data", "mtg_rules.txt")
-    Paths.FOUNDATION_MODEL =  os.path.join(this, "models", "magic-distilbert-base-v1")
-    Paths.PSEUDO_LABELED_DATASET =  os.path.join(this, "data", "card_roles_dataset.jsonl")
-    Paths.FINAL_CLASSIFIER =  os.path.join(this, "models", "card-role-classifier-final")
+    Paths.clean_data_json = os.path.join(this, "data", "clean_data.json")
+    Paths.rules_txt =  os.path.join(this, "data", "mtg_rules.txt")
+    Paths.fundation_model =  os.path.join(this, "models", "magic-distilbert-base-v1")
+    Paths.pseudo_labeled_dataset =  os.path.join(this, "data", "card_roles_dataset.jsonl")
+    Paths.final_classifier =  os.path.join(this, "models", "card-role-classifier-final")
+    Paths.scraped_articles_txt = os.path.join(this, "data", "scraped_articles.txt")
 
     main()
