@@ -84,7 +84,7 @@ class Deck:
 ARCHIDEKT_BASE = "https://archidekt.com/api/decks"
 
 
-def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
+def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter):
     """Yield Commander deck search results (metadata pages)."""
     page = 1; fetched = 0
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
@@ -114,7 +114,7 @@ def archidekt_iter_decks(limit: int, rate: SimpleRateLimiter) -> Iterable[dict]:
             break
 
 
-def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimiter = None) -> Optional[Deck]:
+def archidekt_fetch_deck(deck_id:int, known_ids: Set[str], rate: SimpleRateLimiter = None):
     headers = {"User-Agent": "edh-dataset-bot/0.1 (contact: research)"}
     if rate == None:
         rate = SimpleRateLimiter()
@@ -219,7 +219,7 @@ def moxfield_fetch_deck(public_id: str, name_to_id: Dict[str, str], rate: Simple
 
 """
 
-def color_bucket(ci: List[str]) -> str:
+def color_bucket(ci: List[str]):
     unique_colors = set(c for c in ci if c)
     if not unique_colors:
         return "C"
@@ -252,7 +252,7 @@ ALL_TAGS = [
 ]
 
 
-def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
+def extract_strategic_tags(deck_tags: List[str]):
     """
     Finds all relevant strategic tags from a deck's tag list based on a priority list
     """
@@ -266,7 +266,7 @@ def extract_strategic_tags(deck_tags: List[str]) -> Set[str]:
     return found_tags
 
 
-def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int) -> List[Deck]:
+def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int):
     """
     Diversification function with two levels of control:
     1. Keeps a maximum of 'per_bucket' decks for each color identity.
