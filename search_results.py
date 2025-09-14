@@ -80,8 +80,8 @@ if __name__ == '__main__':
     num_types = 422
     num_keyw = 627
 
-    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_200_3.pt")
-    db_name = "mtg_cards_v1_div_200_3"
+    embedder_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_all_200_3.pt")
+    db_name = "mtg_cards_v1_all_200_3"
 
     embedder = vector_database.CardEmbedder(
         device="cpu",
@@ -106,11 +106,12 @@ if __name__ == '__main__':
 
     user_prompt = ""
     #user_prompt = "sacrifice a creature"
-    #user_prompt = "find some card draw"
+    # user_prompt = "find some card draw"
     #user_prompt = "draw a card"
     #user_prompt = "deal damage to an opponent"
     #user_prompt = "destroy target creature"
-    #user_prompt = "find some creature removal"
+    #user_prompt = "destroy all creatures"
+    # user_prompt = "I need some creature removal"
 
     prompt_based_results = retrieval_system.recommend_cards(
         deck_id=animar_id,
@@ -126,3 +127,4 @@ if __name__ == '__main__':
             image_folder=img_folder_path,
             title=f"Results for Prompt: '{user_prompt}', using collection '{db_name}'"
         )
+

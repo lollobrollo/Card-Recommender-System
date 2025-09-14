@@ -12,6 +12,7 @@ import re
 from collections import defaultdict
 from models import TripletEDHDataset
 
+
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 4.0):
         self.per_sec = per_sec
@@ -451,10 +452,11 @@ if __name__ == "__main__":
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     decks_path_div = os.path.join(data_dir, "edh_decks_div.jsonl")
     dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
-    decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
-    dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
+    #decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
+    #dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
     card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     cat_feat_map_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
 
     create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
-    create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)
+    #create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)
+    

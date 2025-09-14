@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import models
+from utils import preprocess_text
 from train import load_card_encoder
 import ijson
 import os
@@ -182,8 +183,8 @@ class CardEmbedder:
             # full_repr = [stats, rarity, color, cmc, semantic, roles, types, keywords]
 
             # Get fields related to prompt (semantic, roles)
-            prompt_semantic_emb = torch.tensor(self.llm.encode(prompt), device=self.device)
-            inputs = self.role_tokenizer(prompt, return_tensors="pt", truncation=True, padding=True).to(self.device)
+            prompt_semantic_emb = torch.tensor(self.llm.encode(preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
+            inputs = self.role_tokenizer(preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
             outputs = self.role_classifier(**inputs)
             prompt_role_logits = outputs.logits.squeeze(0)
 
@@ -211,8 +212,8 @@ class CardEmbedder:
         """
         with torch.no_grad():
             # Get semantic and role vectors from the prompt
-            prompt_semantic_emb = torch.tensor(self.llm.encode(prompt), device=self.device)
-            inputs = self.role_tokenizer(prompt, return_tensors="pt", truncation=True, padding=True).to(self.device)
+            prompt_semantic_emb = torch.tensor(self.llm.encode(preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
+            inputs = self.role_tokenizer(preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
             prompt_role_logits = self.role_classifier(**inputs).logits.squeeze(0)
 
             # Create a neutral scaffold for the other features
@@ -233,19 +234,6 @@ class CardEmbedder:
             # Get this vector's direction in the synergy space
             prompt_direction_vector = self.cpr_model.card_embedding(pure_prompt_repr).squeeze(0)
             return F.normalize(prompt_direction_vector, p=2, dim=0)
-
-
-# def create_card_representation(oid, partial_map, cat_map, feature_encoder):
-#     """
-#     creates and returns a complete card representation for a single card
-#     """
-#     card_types, card_keyw = cat_map[oid].values()
-#     card_types = card_types.unsqueeze(0).cpu()
-#     card_keyw = card_keyw.unsqueeze(0).cpu()
-#     cat_embeddings = feature_encoder(card_types, card_keyw).squeeze(0)
-#     partial_tensor = partial_map[oid].cpu()
-#     final_tensor = torch.cat((partial_tensor, cat_embeddings)).cpu()
-#     return final_tensor
 
 
 class CardRetriever:
@@ -315,7 +303,7 @@ class CardRetriever:
 
     def _query_db(self, query_embedding, n:int, colors=None, card_collection=None):
         """
-        Takes a deck embedding and returns the top N recommended cards, optionally filtered by color.
+        Takes a deck embedding and returns the top N recommended cards (IDs), optionally filtered by color.
         """
         if card_collection is None:
             print("Failed to access card collection.")
@@ -336,11 +324,10 @@ class CardRetriever:
                 where=filter_metadata if filter_metadata else None
             )
 
-            card_names = []
-            if results and results['ids'][0]:
-                for metadata in results['metadatas'][0]:
-                    card_names.append(metadata.get("name", "unknown name").lower())
-            return card_names
+            if results and results['ids'] and results['ids'][0]:
+                return results['ids'][0]
+            return []
+
         except Exception as e:
             print(f"An error occurred during ChromaDB query: {e}")
             return []
@@ -412,39 +399,46 @@ class CardRetriever:
             
             # Define the spectrum of synergy-to-prompt influence to explore
             alpha_values = [0.0, 0.25, 0.5, 1.0, 2.0]
-            k_per_query = n * 3 # Retrieve more cards, filter them later based on mmr
+            k_per_query = n * 5 # Retrieve more cards, filter them later based on mmr
 
             for alpha in alpha_values:
                 current_query_vector = deck_emb + alpha * prompt_direction_vec
                 normalized_query = F.normalize(current_query_vector, p=2, dim=0)
                 
-                result_names = self._query_db(
+                retrieved_ids = self._query_db(
                     query_embedding=normalized_query.cpu().tolist(),
                     n=k_per_query,
                     colors=deck_colors,
                     card_collection=card_collection
                 )
-                candidate_pool.update(result_names)
+                candidate_pool.update(retrieved_ids)
 
-            candidate_names = list(candidate_pool)
+            candidate_ids = list(candidate_pool)
             relevance_query_vector = F.normalize(deck_emb + 0.5 * prompt_direction_vec, p=2, dim=0)
         else:
             print(f"--- Generating synergy recommendations ---")
-            candidate_names = self._query_db(
+            candidate_ids = self._query_db(
                     query_embedding=deck_emb.cpu().tolist(),
-                    n=n*4,
+                    n=n * 10,
                     colors=deck_colors,
                     card_collection=card_collection
-                )            
+                )
             relevance_query_vector = deck_emb
 
-        if not candidate_names:
-            print("No cards were retrieved.")
+        if not candidate_ids:
+            print("No candidates were retrieved.")
+            return []
+
+        # print(f"Candidate pool size before filtering: {len(candidate_ids)}")
+        deck_oids_set = set(deck_oids)
+        candidate_ids = [cid for cid in candidate_ids if cid not in deck_oids_set]
+        # print(f"Candidate pool size after filtering out deck cards: {len(candidate_ids)}")
+
+        if not candidate_ids:
+            print("No new cards to recommend after filtering.")
             return []
 
         # Use Maximal Marginal Ranking to diversify results
-        candidate_ids = [self.name_to_id.get(name) for name in candidate_names]
-        candidate_ids = [oid for oid in candidate_ids if oid]
         candidate_embeddings = torch.tensor(
             card_collection.get(ids=candidate_ids, include=["embeddings"])['embeddings'],
             device=self.embedder.device
@@ -455,10 +449,10 @@ class CardRetriever:
             candidate_embeddings=candidate_embeddings,
             candidate_ids=candidate_ids,
             lambda_mult=mmr_lambda,
-            top_k=n
+            top_k=min(n, len(candidate_ids))
             )
         
-        return [self.id_to_name[oid] for oid in final_ids]
+        return [self.id_to_name.get(oid, "Unknown Card") for oid in final_ids]
 
 
 if __name__ == "__main__":
@@ -468,7 +462,7 @@ if __name__ == "__main__":
     db_name = "mtg_cards_v1_all_20_3"
     client = chromadb.PersistentClient(path=db_path)    
 
-    emb_dict_paths = [os.path.join(this, "data", "emb_dict_v1_"+dataset+"_"+epochs+"_"+loss+".pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
-    db_names = ["mtg_cards_v1_"+dataset+"_"+epochs+"_"+loss for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    emb_dict_paths = [os.path.join(this, "data", f"emb_dict_v1_{dataset}_{epochs}_{loss}.pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    db_names = [f"mtg_cards_v1_{dataset}_{epochs}_{loss}" for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
     for card_emb_path, db_name in zip(emb_dict_paths, db_names):
         build_and_save_chroma_db(card_emb_path, cards_metadata, client, db_name)

@@ -485,7 +485,7 @@ def build_card_representations(batch_size=8, use_img=False):
         print(f"\nError saving dictionary to {output_path}: {e}\n")    
 
 
-
+   
 if __name__ == "__main__":
     # download = input("Download fresher data? (Y/N): ").strip().lower() == "y"
     # base_dir = os.path.dirname(os.path.realpath(__file__))
