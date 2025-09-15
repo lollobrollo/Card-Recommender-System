@@ -299,7 +299,9 @@ class CardRetriever:
             formatted_subsets.append(formatted_string)
         
         or_conditions = [{"color_identity": {"$eq": s}} for s in formatted_subsets]
-        return {"$or": or_conditions}
+        if len(or_conditions) == 1: # If only colorless, just return it
+            return or_conditions[0]
+        return {"$or": or_conditions} # With more colors, usa an or condition
 
     def _query_db(self, query_embedding, n:int, colors=None, card_collection=None):
         """
