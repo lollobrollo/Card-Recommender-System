@@ -6,6 +6,9 @@ import math
 from typing import List, Dict
 import vector_database
 import chromadb
+import json
+import pandas as pd
+import seaborn as sns
 
 
 def show_card_results(card_names, card_dict_path, image_folder, title):
@@ -62,8 +65,7 @@ def show_card_results(card_names, card_dict_path, image_folder, title):
     plt.show()
 
 
-if __name__ == '__main__':
-    this = os.path.dirname(__file__)
+def search_results(this:str):
     data_dir = os.path.join(this, "data")
     repr_dict_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     type_keyw_dict_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
@@ -128,3 +130,82 @@ if __name__ == '__main__':
             title=f"Results for Prompt: '{user_prompt}', using collection '{db_name}'"
         )
 
+
+def demo_statistics(this):
+    feedback_path = os.path.join(this, "user_feedback.jsonl")
+    if not os.path.exists(feedback_path):
+        print(f"Error: Feedback file not found at '{feedback_path}'")
+        return
+
+    all_ratings_data = []
+    with open(feedback_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                model_version = record.get('model_version')
+                
+                if not model_version or 'ratings' not in record:
+                    continue
+                
+                # Create one entry for each individual card rating
+                for rating_info in record['ratings']:
+                    rating = rating_info.get('rating')
+                    if rating is not None:
+                        all_ratings_data.append({
+                            'model_version': model_version,
+                            'rating': rating
+                        })
+            except json.JSONDecodeError:
+                print(f"Warning: Skipping a malformed line in the JSONL file.")
+    
+    if not all_ratings_data:
+        print("No valid feedback records found in the file.")
+        return
+
+    df = pd.DataFrame(all_ratings_data)
+    unique_models = df['model_version'].unique()
+    n_models = len(unique_models)
+
+    if n_models == 0:
+        print("No models found in the feedback data.")
+        return
+
+    print(f"\nGenerating plots for {n_models} model(s)...")
+    sns.set_theme(style="whitegrid", palette="viridis")
+
+    n_cols = 4
+    n_rows = math.ceil(n_models / n_cols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 8, n_rows * 6), squeeze=False)
+    axes = axes.flatten() # Simplifies later interaction
+
+    for i, model_name in enumerate(sorted(unique_models)):
+        ax = axes[i]
+        model_df = df[df['model_version'] == model_name]
+        sns.countplot(
+            x='rating',
+            data=model_df,
+            ax=ax,
+            order=[1, 2, 3, 4, 5] # Ensure all bars are shown, even if count is 0
+        )
+
+        total_ratings = len(model_df)
+        avg_rating = model_df['rating'].mean()
+        
+        ax.set_title(f'"{model_name}"\n(Avg: {avg_rating:.2f}/5.00 from {total_ratings} ratings)', fontsize=8)
+        ax.set_xlabel("User Rating", fontsize=10)
+        ax.set_ylabel("Number of Ratings", fontsize=10)
+        ax.set_ylim(0, max(10, model_df['rating'].value_counts().max() * 1.1)) # Dynamic y-axis limit
+
+    for j in range(n_models, len(axes)):
+        axes[j].set_visible(False) # Hide unused plots
+
+    fig.suptitle("User Feedback Analysis by Model Version", fontsize=18, fontweight='bold')
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
+
+
+if __name__ == '__main__':
+    this = os.path.dirname(__file__)
+    # search_results(this)
+    demo_statistics(this)

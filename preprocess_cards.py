@@ -144,7 +144,8 @@ def filter_data_by_relevance(input_file, json_path='item'):
     def is_relevant(card):
         if "legal" != card.get("legalities", {}).get("commander", "NA"):
             return False
-        if "Basic Land" in card.get("type_line", ""):
+        type_line = card.get("type_line", "")
+        if any(t in type_line for t in ["Basic Land", "Stickers", "Basic Snow Land"]):
             return False
         if "paper" not in card.get("games", ()):
             return False

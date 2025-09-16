@@ -104,6 +104,7 @@ def get_recommendations_and_show_feedback_ui(deck_url: str, prompt: str, model_c
     )
     
     # --- DYNAMIC UI UPDATE LOGIC ---
+    
     gallery_output = []
     card_ids_for_state = []
     slider_updates = []
@@ -163,6 +164,7 @@ def save_feedback(state_info:dict, *ratings):
 
 
 # ---  GRADIO INTERFACE ---
+
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("# MTG Card Recommender System (with Feedback)")
     
@@ -216,5 +218,6 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
     )
 
 if __name__ == "__main__":
-    get_retriever(list(model_versions.keys())[0])
+    for model_version in list(model_versions.keys()):
+        get_retriever(model_version)
     demo.launch(share=True)
