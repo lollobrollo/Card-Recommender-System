@@ -9,6 +9,7 @@ import chromadb
 import json
 import pandas as pd
 import seaborn as sns
+import re
 
 
 def show_card_results(card_names, card_dict_path, image_folder, title):
@@ -131,7 +132,7 @@ def search_results(this:str):
         )
 
 
-def demo_statistics(this):
+def demo_statistics_v1(this):
     feedback_path = os.path.join(this, "user_feedback.jsonl")
     if not os.path.exists(feedback_path):
         print(f"Error: Feedback file not found at '{feedback_path}'")
@@ -143,11 +144,9 @@ def demo_statistics(this):
             try:
                 record = json.loads(line)
                 model_version = record.get('model_version')
-                
                 if not model_version or 'ratings' not in record:
                     continue
-                
-                # Create one entry for each individual card rating
+
                 for rating_info in record['ratings']:
                     rating = rating_info.get('rating')
                     if rating is not None:
@@ -156,53 +155,149 @@ def demo_statistics(this):
                             'rating': rating
                         })
             except json.JSONDecodeError:
-                print(f"Warning: Skipping a malformed line in the JSONL file.")
+                print("Warning: Skipping a malformed line in the JSONL file.")
     
     if not all_ratings_data:
         print("No valid feedback records found in the file.")
         return
 
-    df = pd.DataFrame(all_ratings_data)
-    unique_models = df['model_version'].unique()
-    n_models = len(unique_models)
+    df = pd.DataFrame.from_records(all_ratings_data)
 
-    if n_models == 0:
-        print("No models found in the feedback data.")
-        return
+    pattern = re.compile(r"(Diversified|Complete) Dataset \((\d+) Epochs, (Triplet|InfoNCE)\)")
+    df[['dataset', 'epochs', 'loss']] = df['model_version'].str.extract(pattern)
+    df = df.dropna(subset=["dataset", "epochs", "loss"])
+    df['epochs'] = pd.to_numeric(df['epochs'])
 
-    print(f"\nGenerating plots for {n_models} model(s)...")
-    sns.set_theme(style="whitegrid", palette="viridis")
+    # Compute stats for later titles
+    stats = df.groupby(['dataset', 'loss', 'epochs'])['rating'].agg(['mean', 'count']).reset_index()
 
-    n_cols = 4
-    n_rows = math.ceil(n_models / n_cols)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 8, n_rows * 6), squeeze=False)
-    axes = axes.flatten() # Simplifies later interaction
+    # --- Single combined grid ---
+    g = sns.catplot(
+        data=df,
+        x="rating",
+        col="epochs",
+        row="dataset",
+        hue="loss",
+        kind="count",
+        palette="rocket",
+        height=5,
+        aspect=1.2,
+        order=[1, 2, 3, 4, 5],
+        legend=True,
+        margin_titles=True
+    )
 
-    for i, model_name in enumerate(sorted(unique_models)):
-        ax = axes[i]
-        model_df = df[df['model_version'] == model_name]
-        sns.countplot(
-            x='rating',
-            data=model_df,
-            ax=ax,
-            order=[1, 2, 3, 4, 5] # Ensure all bars are shown, even if count is 0
-        )
+    # Global title
+    g.fig.suptitle("User Feedback Analysis (All Training Epochs)", fontsize=14, fontweight="bold")
 
-        total_ratings = len(model_df)
-        avg_rating = model_df['rating'].mean()
-        
-        ax.set_title(f'"{model_name}"\n(Avg: {avg_rating:.2f}/5.00 from {total_ratings} ratings)', fontsize=8)
-        ax.set_xlabel("User Rating", fontsize=10)
-        ax.set_ylabel("Number of Ratings", fontsize=10)
-        ax.set_ylim(0, max(10, model_df['rating'].value_counts().max() * 1.1)) # Dynamic y-axis limit
+    # Annotate each subplot
+    for (row_val, col_val), ax in g.axes_dict.items():
+        for epoch_count in sorted(df['epochs'].unique()):
+            stat_row = stats[(stats["dataset"] == row_val) & (stats["loss"] == col_val) & (stats["epochs"] == epoch_count)]
+            if not stat_row.empty:
+                avg = stat_row["mean"].iloc[0]
+                count = stat_row["count"].iloc[0]
+                ax.set_title(f"{row_val} | {col_val} ({epoch_count} epochs)\n(Avg: {avg:.2f}/5, N={count})", fontsize=9)
 
-    for j in range(n_models, len(axes)):
-        axes[j].set_visible(False) # Hide unused plots
+    g.set_axis_labels("User Rating", "Number of Ratings")
+    g.figure.subplots_adjust(top=0.85)
 
-    fig.suptitle("User Feedback Analysis by Model Version", fontsize=18, fontweight='bold')
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
+
+def demo_statistics(this):
+    feedback_path = os.path.join(this, "user_feedback.jsonl")
+    if not os.path.exists(feedback_path):
+        print(f"Error: Feedback file not found at '{feedback_path}'")
+        return
+
+    # ... (Data loading and DataFrame creation is the same)
+    all_ratings_data = []
+    with open(feedback_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                model_version = record.get('model_version')
+                if not model_version or 'ratings' not in record: continue
+                for rating_info in record['ratings']:
+                    all_ratings_data.append({
+                        'model_version': model_version,
+                        'rating': rating_info.get('rating')
+                    })
+            except json.JSONDecodeError:
+                continue
+    if not all_ratings_data:
+        print("No valid feedback records found.")
+        return
+    df = pd.DataFrame.from_records(all_ratings_data)
+    pattern = re.compile(r"(Diversified|Complete) Dataset \((\d+) Epochs, (Triplet|InfoNCE)\)")
+    df[['dataset', 'epochs', 'loss']] = df['model_version'].str.extract(pattern)
+    df = df.dropna(subset=["dataset", "epochs", "loss"])
+    df['epochs'] = pd.to_numeric(df['epochs'])
+    # ... (End of unchanged section)
+
+    # 1. Compute stats for all combinations
+    stats = df.groupby(['dataset', 'epochs', 'loss'])['rating'].agg(['mean', 'count']).reset_index()
+
+    # 2. Use catplot to create the faceted grid
+    g = sns.catplot(
+        data=df,
+        x="rating",
+        col="loss",
+        row="dataset",
+        hue="epochs",
+        kind="count",
+        palette="tab10",
+        height=5,
+        aspect=1.2,
+        order=[1, 2, 3, 4, 5],
+        legend_out=True
+    )
+
+    # 3. Add a clear, global title
+    g.fig.suptitle("User Feedback Analysis by Training Configuration", fontsize=16, fontweight="bold")
+    g.fig.subplots_adjust(top=0.9)
+
+    # --- 4. THE FIX IS HERE: Annotate each subplot using ax.text() ---
+    for (row_val, col_val), ax in g.axes_dict.items():
+        # Set the simple, clean title provided by Seaborn
+        ax.set_title(f"{row_val} | {col_val}")
+        
+        # Get all stats for this specific subplot
+        subplot_stats = stats[(stats['dataset'] == row_val) & (stats['loss'] == col_val)]
+        
+        # Build the multi-line string for our statistics box
+        stats_lines = []
+        for _, row in subplot_stats.iterrows():
+            avg = row['mean']
+            count = row['count']
+            epochs = int(row['epochs'])
+            stats_lines.append(f"{epochs} Epochs: Avg {avg:.2f}, N={count}")
+        stats_string = "\n".join(stats_lines)
+
+        # Place the text box in the top-right corner of the plot area.
+        # `transform=ax.transAxes` uses coordinates relative to the plot axes (0,0 to 1,1).
+        ax.text(0.95, 0.95, stats_string,
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment='top',
+                horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.7))
+
+        # Add text labels on top of each bar for clarity
+        for p in ax.patches:
+            height = p.get_height()
+            if height > 0: # Only add labels to bars that exist
+                ax.annotate(f'{int(height)}', 
+                            (p.get_x() + p.get_width() / 2., height), 
+                            ha='center', va='center', 
+                            xytext=(0, 5), 
+                            textcoords='offset points')
+    # --- END OF FIX ---
+    
+    # 5. Finalize and show the plot
+    g.set_axis_labels("User Rating", "Number of Ratings")
+    plt.show()
 
 
 if __name__ == '__main__':
