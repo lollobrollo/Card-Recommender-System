@@ -133,7 +133,7 @@ def search_results(this:str):
 
 
 def demo_statistics_v1(this):
-    feedback_path = os.path.join(this, "user_feedback.jsonl")
+    feedback_path = os.path.join(this, "misc", "user_feedback.jsonl")
     if not os.path.exists(feedback_path):
         print(f"Error: Feedback file not found at '{feedback_path}'")
         return
@@ -205,13 +205,13 @@ def demo_statistics_v1(this):
     plt.show()
 
 
-def demo_statistics(this):
-    feedback_path = os.path.join(this, "user_feedback.jsonl")
+def demo_statistics_v2(this):
+
+    feedback_path = os.path.join(this, "misc", "user_feedback.jsonl")
     if not os.path.exists(feedback_path):
         print(f"Error: Feedback file not found at '{feedback_path}'")
         return
 
-    # ... (Data loading and DataFrame creation is the same)
     all_ratings_data = []
     with open(feedback_path, 'r', encoding='utf-8') as f:
         for line in f:
@@ -234,12 +234,9 @@ def demo_statistics(this):
     df[['dataset', 'epochs', 'loss']] = df['model_version'].str.extract(pattern)
     df = df.dropna(subset=["dataset", "epochs", "loss"])
     df['epochs'] = pd.to_numeric(df['epochs'])
-    # ... (End of unchanged section)
 
-    # 1. Compute stats for all combinations
     stats = df.groupby(['dataset', 'epochs', 'loss'])['rating'].agg(['mean', 'count']).reset_index()
 
-    # 2. Use catplot to create the faceted grid
     g = sns.catplot(
         data=df,
         x="rating",
@@ -254,19 +251,13 @@ def demo_statistics(this):
         legend_out=True
     )
 
-    # 3. Add a clear, global title
     g.fig.suptitle("User Feedback Analysis by Training Configuration", fontsize=16, fontweight="bold")
     g.fig.subplots_adjust(top=0.9)
 
-    # --- 4. THE FIX IS HERE: Annotate each subplot using ax.text() ---
     for (row_val, col_val), ax in g.axes_dict.items():
-        # Set the simple, clean title provided by Seaborn
         ax.set_title(f"{row_val} | {col_val}")
-        
-        # Get all stats for this specific subplot
         subplot_stats = stats[(stats['dataset'] == row_val) & (stats['loss'] == col_val)]
         
-        # Build the multi-line string for our statistics box
         stats_lines = []
         for _, row in subplot_stats.iterrows():
             avg = row['mean']
@@ -275,8 +266,6 @@ def demo_statistics(this):
             stats_lines.append(f"{epochs} Epochs: Avg {avg:.2f}, N={count}")
         stats_string = "\n".join(stats_lines)
 
-        # Place the text box in the top-right corner of the plot area.
-        # `transform=ax.transAxes` uses coordinates relative to the plot axes (0,0 to 1,1).
         ax.text(0.95, 0.95, stats_string,
                 transform=ax.transAxes,
                 fontsize=10,
@@ -284,7 +273,6 @@ def demo_statistics(this):
                 horizontalalignment='right',
                 bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.7))
 
-        # Add text labels on top of each bar for clarity
         for p in ax.patches:
             height = p.get_height()
             if height > 0: # Only add labels to bars that exist
@@ -293,14 +281,22 @@ def demo_statistics(this):
                             ha='center', va='center', 
                             xytext=(0, 5), 
                             textcoords='offset points')
-    # --- END OF FIX ---
     
-    # 5. Finalize and show the plot
     g.set_axis_labels("User Rating", "Number of Ratings")
     plt.show()
+
+
+def demo_statistics_v3(this):
+    """
+    ccreates three plots for the models that passed stage 1
+    """
+    feedback_path = os.path.join(this, "misc", "user_feedback_s2.jsonl")
+    if not os.path.exists(feedback_path):
+        print(f"Error: Feedback file not found at '{feedback_path}'")
+        return
 
 
 if __name__ == '__main__':
     this = os.path.dirname(__file__)
     # search_results(this)
-    demo_statistics(this)
+    # demo_statistics_v2(this)

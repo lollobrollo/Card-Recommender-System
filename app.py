@@ -5,9 +5,9 @@ import re
 from PIL import Image
 import json
 from datetime import datetime
+import chromadb
 import vector_database
 import utils
-import chromadb
 
 
 this_dir = os.path.dirname(__file__)
@@ -15,16 +15,32 @@ data_dir = os.path.join(this_dir, "data")
 models_dir = os.path.join(this_dir, "models")
 db_path = os.path.join(this_dir, "card_db")
 img_folder_path = os.path.join(data_dir, "images")
-feedback_file = os.path.join(this_dir, "user_feedback.jsonl") # file that will hold user feedback 
+feedback_file = os.path.join(this_dir, "misc", "user_feedback_s2.jsonl") # file that will hold user feedback 
 
+# model_versions = {
+#     f"{ds[0]} Dataset ({epochs} Epochs, {loss[0]})": {
+#         "checkpoint": os.path.join(models_dir, f"cpr_checkpoint_v1_{ds[1]}_{epochs}_{loss[1]}.pt"),
+#         "db_name": f"mtg_cards_v1_{ds[1]}_{epochs}_{loss[1]}"
+#     }
+#     for ds in [("Diversified", "div"), ("Complete", "all")]
+#     for epochs in ["20", "200"]
+#     for loss in [("Triplet", "3"), ("InfoNCE", "nce")]
+# }
+
+# Models that performed best in the first testing
 model_versions = {
-    f"{ds[0]} Dataset ({epochs} Epochs, {loss[0]})": {
-        "checkpoint": os.path.join(models_dir, f"cpr_checkpoint_v1_{ds[1]}_{epochs}_{loss[1]}.pt"),
-        "db_name": f"mtg_cards_v1_{ds[1]}_{epochs}_{loss[1]}"
+    "Diversified Dataset (20 Epochs, Triplet)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_div_20_triplet_s2.pt"),
+        "db_name": "mtg_cards_v1_div_20_triplet_s2"
+    },
+    "Complete Dataset (200 Epochs, Triplet)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_triplet_s2.pt"),
+        "db_name": "mtg_cards_v1_all_200_triplet_s2"
+    },
+    "Complete Dataset (200 Epochs, InfoNCE)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce_s2.pt"),
+        "db_name": "mtg_cards_v1_all_200_nce_s2"
     }
-    for ds in [("Diversified", "div"), ("Complete", "all")]
-    for epochs in ["20", "200"]
-    for loss in [("Triplet", "3"), ("InfoNCE", "nce")]
 }
 
 
@@ -36,9 +52,9 @@ mtg_llm_path = os.path.join(models_dir, "magic-distilbert-base-v1")
 role_class_path = os.path.join(models_dir, "card-role-classifier-final")
 client = chromadb.PersistentClient(path=db_path)
 name_to_id_map = torch.load(card_dict_path, weights_only=False)
-id_to_name_map = {v: k for k, v in name_to_id_map.items()} # For logging
+id_to_name_map = {v: k for k, v in name_to_id_map.items()} # used for logging
 
-num_types = 422
+num_types = 420 # 420 in new versions (s2), old models might still use 422
 num_keyw = 627
 
 retriever_cache = {}
@@ -220,4 +236,5 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
 if __name__ == "__main__":
     for model_version in list(model_versions.keys()):
         get_retriever(model_version)
+    # get_retriever(list(model_versions.keys())[0])
     demo.launch(share=True)

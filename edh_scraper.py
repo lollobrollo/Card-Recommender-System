@@ -415,27 +415,31 @@ def create_and_save_CPRdataset(decks_path: str, output_path: str, card_feature_m
     try:
         card_feature_map = torch.load(card_feature_map_path)
         cat_feature_map = torch.load(cat_feature_map_path)
+        known_card_ids = set(card_feature_map.keys())
     except Exception as e:
         print(f"Couldn't load feature maps: {e}")
  
     try:
-        max_deck_size = 0; min_deck_size = 20
         decklists = []
-        with open(decks_path, "r", encoding="utf-8") as decks:
-            for line in decks:
+        with open(decks_path, "r", encoding="utf-8") as decks_file:
+            for line in tqdm(decks_file, desc="Filtering decks"):
                 deck = json.loads(line)
-                cards = deck.get("mainboard_ids", [])
-                cards.extend(deck.get("commander_ids", []))
-                decklists.append(cards)
-                max_deck_size = max(max_deck_size, len(cards))
-                min_deck_size = min(min_deck_size, len(cards))
-        anchor_size_range = (min_deck_size, max_deck_size)
-        
+                all_cards_in_deck = deck.get("mainboard_ids", []) + deck.get("commander_ids", [])
+                filtered_cards = [oid for oid in all_cards_in_deck if oid in known_card_ids]
+                if len(filtered_cards) > 30:
+                    decklists.append(filtered_cards)
+
+        if not decklists:
+            print("Error: No valid decklists were found after filtering. The output file will not be created.")
+            return
+
+        anchor_size_range = (20, 85)
         dataset = TripletEDHDataset(decklists, card_feature_map, cat_feature_map, anchor_size_range)
         torch.save(dataset, output_path)
-        print(f"successfully saved {len(decklists)} deckists into dataset to {output_path}")
+        print(f"Successfully saved dataset with {len(decklists)} decklists to '{output_path}'")
+
     except Exception as e:
-        print(f"Couldn't save initialised dataset: {e}")
+        print(f"An error occurred while creating or saving the dataset: {e}")
 
 
 
@@ -451,12 +455,12 @@ if __name__ == "__main__":
 
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     decks_path_div = os.path.join(data_dir, "edh_decks_div.jsonl")
-    dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
-    #decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
-    #dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
+    dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div_s2.pt")
+    decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
+    dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all_s2.pt")
     card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     cat_feat_map_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
 
     create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
-    #create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)
+    create_and_save_CPRdataset(decks_path_all, dataset_path_all, card_feat_map_path, cat_feat_map_path)
     

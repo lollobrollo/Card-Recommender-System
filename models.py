@@ -54,7 +54,7 @@ class HybridConvAutoencoder(nn.Module):
 
     def encode(self, x):
         x = self.encoder_conv(x)
-        return self.encoder_linear(x)    
+        return self.encoder_linear(x)
         
     def decode(self, x):
         x = self.decoder_linear(x)
@@ -260,7 +260,7 @@ class PipelineCPR(nn.Module):
         super().__init__()
 
         self.feature_encoder = feature_encoder
-        total_dim = partial_card_dim + self.feature_encoder.output_dim
+        total_dim = partial_card_dim + self.feature_encoder.output_dim # 797 + 64 + 64 = 925
         self.card_encoder = CardEncoder_v1(card_dim=total_dim, hidden_dim=card_hidden_dim, out_dim=embed_dim)
         self.deck_encoder = DeckEncoder_v1(card_dim=total_dim, out_dim=embed_dim)
         self.siamese_head = SiameseHead(input_dim=embed_dim, hidden_dim=embed_dim, out_dim=out_dim)
@@ -303,7 +303,7 @@ class TripletEDHDataset(Dataset):
 
     def __getitem__(self, idx):
         """
-        Negative is not returned, as it is mined inside cpr_step_fn
+        Negative is not returned, as it is mined inside cpr_step_fn (in the case of triplet loss)
         also returns embeddings of types and keywords so that FeatureEncoder can "compress" them into a more meaningful representation
         """
         deck = self.decklists[idx]
@@ -323,7 +323,7 @@ class TripletEDHDataset(Dataset):
         positive_card_id = random.choice(holdout_ids)
 
         positive_card_tensor = self.card_feature_map[positive_card_id]
-        anchor_deck_tensors = torch.stack([self.card_feature_map[id] for id in anchor_deck_ids])
+        anchor_deck_tensors = torch.stack([self.card_feature_map[oid] for oid in anchor_deck_ids])
 
         pos_types = self.cat_feature_map[positive_card_id]["types"]
         pos_keyw = self.cat_feature_map[positive_card_id]["keywords"]
@@ -366,7 +366,7 @@ class FeatureEncoder(nn.Module):
     Takes integer indices for categorical features (types, keywords) and
     converts them into a single, dense, trainable feature vector.
     """
-    def __init__(self, num_types:int=422, type_emb_dim:int=64, num_keyw:int=627, keyw_emb_dim:int=64):  
+    def __init__(self, num_types:int=420, type_emb_dim:int=64, num_keyw:int=627, keyw_emb_dim:int=64):  
         super().__init__()
         # Tried with nn.Embedder with poor results
         self.type_projector = nn.Linear(num_types, type_emb_dim)

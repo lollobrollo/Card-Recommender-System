@@ -314,11 +314,11 @@ def main_cpr_training(
     LEARNING_RATE = 0.00002,
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     BATCH_SIZE = 128,
-    NUM_TYPES = 422,
+    NUM_TYPES = 420,
     NUM_KEYW = 627):
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
 
-    feature_encoder = models.FeatureEncoder(num_types=NUM_TYPES, type_emb_dim=64, num_keyw=NUM_KEYW, keyw_emb_dim=64) # TODO: check number of keywords and types
+    feature_encoder = models.FeatureEncoder(num_types=NUM_TYPES, type_emb_dim=64, num_keyw=NUM_KEYW, keyw_emb_dim=64)
     cpr_model = models.PipelineCPR(feature_encoder, out_dim=512).to(DEVICE)
     cpr_optimizer = optim.AdamW(cpr_model.parameters(), lr=LEARNING_RATE)
 
@@ -437,52 +437,73 @@ if __name__ == "__main__":
     
     this = os.path.dirname(__file__)
     data_dir = os.path.join(this, "data")
-
+    models_dir = os.path.join(this, "models")
     # main_autoencoder_training(this)
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
     
-    data_dir = os.path.join(this, "data")
-    # decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
-    # dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
-    decks_path_div = os.path.join(data_dir, "edh_decks_div.jsonl")
-    dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
-    card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
-    cat_feat_map_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
+    # data_dir = os.path.join(this, "data")
+    # # decks_path_all = os.path.join(data_dir, "edh_decks_all.jsonl")
+    # # dataset_path_all = os.path.join(data_dir, "cpr_dataset_v1_all.pt")
+    # decks_path_div = os.path.join(data_dir, "edh_decks_div.jsonl")
+    # dataset_path_div = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
+    # card_feat_map_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
+    # cat_feat_map_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
 
-    edh_scraper.create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
+    # edh_scraper.create_and_save_CPRdataset(decks_path_div, dataset_path_div, card_feat_map_path, cat_feat_map_path)
 
-    epochs_list = [20,200]
-    cpr_dataset_path = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
-    loss_fn = nn.TripletMarginLoss(margin=0.3)
-    step_fn = cpr_step_fn_triplet
-    for epochs in epochs_list:
-        cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_"+str(epochs)+"_3.pt")
-        main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, epochs)
+    # epochs_list = [20,200]
+    # cpr_dataset_path = os.path.join(data_dir, "cpr_dataset_v1_div.pt")
+    # loss_fn = nn.TripletMarginLoss(margin=0.3)
+    # step_fn = cpr_step_fn_triplet
+    # for epochs in epochs_list:
+    #     cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_"+str(epochs)+"_3.pt")
+    #     main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, epochs)
 
-    loss_fn = nn.CrossEntropyLoss()
-    step_fn = cpr_step_fn_infonce
-    for epochs in epochs_list:
-        cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_"+str(epochs)+"_nce.pt")
-        main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, epochs)
+    # loss_fn = nn.CrossEntropyLoss()
+    # step_fn = cpr_step_fn_infonce
+    # for epochs in epochs_list:
+    #     cpr_checkpoint_path = os.path.join(this, "models", "cpr_checkpoint_v1_div_"+str(epochs)+"_nce.pt")
+    #     main_cpr_training(cpr_dataset_path, cpr_checkpoint_path, loss_fn, step_fn, epochs)
+
+    
+    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+    # Removed some cards -> -2 types of cards
+    # Retraining only the top 3 models from previous testing
+
+    div_path = os.path.join(data_dir, "cpr_dataset_v1_div_s2.pt")
+    all_path = os.path.join(data_dir, "cpr_dataset_v1_all_s2.pt")
+    checkpoint_1 = os.path.join(models_dir, "cpr_checkpoint_v1_div_20_triplet_s2.pt")
+    checkpoint_2 = os.path.join(models_dir, "cpr_checkpoint_v1_all_200_triplet_s2.pt")
+    checkpoint_3 = os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce_s2.pt")
+    
+    main_cpr_training(div_path, checkpoint_1, nn.TripletMarginLoss(margin=0.3), cpr_step_fn_triplet, 20)
+    main_cpr_training(all_path, checkpoint_2, nn.TripletMarginLoss(margin=0.3), cpr_step_fn_triplet, 200)
+    main_cpr_training(all_path, checkpoint_3, nn.CrossEntropyLoss(), cpr_step_fn_infonce, 200)
+
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-
-
-    # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-    num_types = 422
+    num_types = 420
     num_keyw = 627
     batch_size = 64
 
     repr_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
     type_keyw_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
 
+    # params = [
+    # (os.path.join(data_dir, f"emb_dict_v1_{dataset}_{epochs}_{loss}.pt"),
+    # os.path.join(this, "models", f"cpr_checkpoint_v1_{dataset}_{epochs}_{loss}.pt"))
+    # for dataset in ["div", "all"] for epochs in ["20","200"] for loss in ["nce","3"]
+    # ]
+    
     params = [
-    (os.path.join(data_dir, f"emb_dict_v1_{dataset}_{epochs}_{loss}.pt"),
-    os.path.join(this, "models", f"cpr_checkpoint_v1_{dataset}_{epochs}_{loss}.pt"))
-    for dataset in ["div", "all"] for epochs in ["20","200"] for loss in ["nce","3"]
+        (os.path.join(data_dir, "emb_dict_v1_div_20_triplet_s2.pt"), checkpoint_1),
+        (os.path.join(data_dir, "emb_dict_v1_all_200_triplet_s2.pt"), checkpoint_2),
+        (os.path.join(data_dir, "emb_dict_v1_all_200_nce_s2.pt"), checkpoint_3)
     ]
+    
     for emb_dict_path, cpr_checkpoint_path in params:
         generate_and_save_emb_dict(repr_path, type_keyw_path, cpr_checkpoint_path, num_types, num_keyw, batch_size, emb_dict_path)
+
+

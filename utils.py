@@ -10,13 +10,13 @@ import re
 import json
 
 
-def generate_and_save_card_dict():
+def generate_and_save_card_dict(this):
     """
     Using data/clean_data.json, builds a case-insensitive map from card name to oracle_id
     Filters out cards without an associated image in data/images
     Saves the dictionary into data/card_dict.pt
     """
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    data_dir = os.path.join(this, "data")
     json_path = os.path.join(data_dir, "clean_data.json")
     image_dir = os.path.join(data_dir, "images")
     output_path = os.path.join(data_dir, "card_dict.pt")
@@ -292,7 +292,7 @@ if __name__ == "__main__":
     data_dir = os.path.join(this, "data")
     # img_dir = os.path.join(data_dir, "images")
     # dataset_path = os.path.join(data_dir, "img_dataset.pt")
-    # generate_and_save_card_dict()
+    generate_and_save_card_dict(this)
     # save_dataset_to_pt(img_dir, dataset_path)
 
     partial_data_path = os.path.join(data_dir, "card_repr_dict_v1.pt")

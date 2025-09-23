@@ -19,7 +19,8 @@ from utils import preprocess_text
 import re
 from more_itertools import chunked
 import random
-
+import pandas as pd
+import matplotlib.pyplot as plt
 
 # role_labels = [
 #     "artifact sinergy", "blink / flicker", "cloning / copying", "coin flip", "applying counters",
@@ -45,12 +46,12 @@ class Paths:
 
 # Hyperparameters
 class Config:
-    STAGE1_EPOCHS = 7
-    STAGE3_EPOCHS = 5
+    STAGE1_EPOCHS = 10
+    STAGE3_EPOCHS = 10
     BATCH_SIZE = 16
     LEARNING_RATE = 2e-5
     DISTILLATION_TEMP = 2.0 # Temperature for knowledge distillation
-    ALPHA = 0.5 # Trade-off beween KL-loss and BCE for stage 3 training
+    ALPHA = 0.4 # Trade-off beween KL-loss and BCE for stage 3 training
 
 
 # STAGE 1: DOMAIN-ADAPTIVE PRE-TRAINING
@@ -289,6 +290,37 @@ def run_stage3_supervised_finetuning():
     tokenizer.save_pretrained(Paths.final_classifier)
 
 
+def check_corpus():
+    print("Analyzing corpus sequence lengths...")
+    all_texts = []
+    with open(Paths.rules_txt, "r", encoding="utf-8") as f:
+        rules_content = f.read()
+        relevant_paragraphs = extract_relevant_paragraphs(rules_content)
+        all_texts.extend([preprocess_text(text, mask_name=False) for text in relevant_paragraphs])
+
+    with open(Paths.clean_data_json, "r", encoding="utf-8") as f:
+        for card in ijson.items(f, "item"):
+            text = preprocess_text(text=card.get("oracle_text", ""), card_name=card.get("name", ""))
+            if text:
+                all_texts.append(text)
+
+    with open(Paths.scraped_articles_txt, "r", encoding="utf-8") as f:
+        scraped_lines = [preprocess_text(line.strip(), mask_name=False) for line in f if line.strip()]
+        all_texts.extend(scraped_lines)
+    random.shuffle(all_texts)
+
+    tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+    lengths = [len(tokenizer.encode(text)) for text in all_texts]
+
+    pd.Series(lengths).hist(bins=50)
+    plt.title("Distribution of Tokenized Sequence Lengths")
+    plt.xlabel("Number of Tokens")
+    plt.ylabel("Frequency")
+    plt.show()
+
+    print(f"Sequence Length Stats:\n{pd.Series(lengths).describe(percentiles=[0.5, 0.8, 0.9, 0.95, 0.99])}")
+
+
 
 def main():
     os.makedirs("data", exist_ok=True)
@@ -310,4 +342,6 @@ if __name__ == "__main__":
     Paths.final_classifier =  os.path.join(this, "models", "card-role-classifier-final")
     Paths.scraped_articles_txt = os.path.join(this, "data", "scraped_articles.txt")
 
-    main()
+    # main()
+
+    #check_corpus()

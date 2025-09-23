@@ -329,15 +329,15 @@ def download_images(data_path, output_folder=None):
         print(f"Total errors during download/processing: {errors}")
 
 
-def build_card_representations(batch_size=8, use_img=False):
+def build_card_representations(base_dir, batch_size=8, use_img=False):
     """
     Takes in card data and turns them into corresponding card representations,
     which are saved as a dictionary into a file for later use.
     Args:
+        base_dir (str): Path to current directory
         batch_size (int): Size of card batches processed by models
         use_img (bool): If True, add to the representation the card image embedding
     """
-    base_dir = os.path.dirname(__file__)
     data_dir = os.path.join(base_dir, "data")
     models_dir = os.path.join(base_dir, "models")
 
@@ -411,7 +411,7 @@ def build_card_representations(batch_size=8, use_img=False):
                 img_encoded_batch = encoder.encode(imgs) # shape: (batch_size, 1024)
 
         # Encode semantic embeddings
-        oracle_texts = [utils.preprocess_oracle_text(card.get("oracle_text", ""), card.get("name", "")) for card in cards_batch]
+        oracle_texts = [utils.preprocess_text(text=card.get("oracle_text", ""), card_name=card.get("name", "")) for card in cards_batch]
         text_emb_batch = semantic_text_model.encode(oracle_texts, batch_size=batch_size, convert_to_tensor=True)
         
         # Encode oracle texts
@@ -489,7 +489,7 @@ def build_card_representations(batch_size=8, use_img=False):
    
 if __name__ == "__main__":
     # download = input("Download fresher data? (Y/N): ").strip().lower() == "y"
-    # base_dir = os.path.dirname(os.path.realpath(__file__))
+    base_dir = os.path.dirname(os.path.realpath(__file__))
     # raw_data = os.path.join(base_dir, "data", "raw_data.json")
     # clean_data = os.path.join(base_dir, "data", "clean_data.json")
 
@@ -509,6 +509,6 @@ if __name__ == "__main__":
 
     # print(count_cards(clean_data))
 
-    build_card_representations(batch_size=16, use_img=False)
-    build_card_representations(batch_size=16, use_img=True)
+    build_card_representations(base_dir, batch_size=16, use_img=False)
+    # build_card_representations(bae_dir, batch_size=16, use_img=True)
     

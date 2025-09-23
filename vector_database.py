@@ -17,6 +17,7 @@ from more_itertools import chunked
 from itertools import combinations
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+# from rank_bm25 import BM25Okapi
 
 
 # - - - - - - - - - - - - - Collection construction - - - - - - - - - - - - -
@@ -334,7 +335,7 @@ class CardRetriever:
             print(f"An error occurred during ChromaDB query: {e}")
             return []
 
-    def _mmr_re_rank(self, query_embedding: torch.Tensor, candidate_embeddings: torch.Tensor, candidate_ids: list, lambda_mult: float, top_k: int) -> list:
+    def _mmr_re_rank(self, query_embedding: torch.Tensor, candidate_embeddings: torch.Tensor, candidate_ids: list, lambda_mult: float, top_k: int):
         """
         Performs Maximal Marginal Relevance (MMR) re-ranking on a list of candidate cards. Returns a list of chosen card IDs.
         """
@@ -374,6 +375,56 @@ class CardRetriever:
 
         return [candidate_ids[i] for i in selected_indices]
 
+    def _stochastic_mmr_re_rank(self, query_embedding: torch.Tensor, candidate_embeddings: torch.Tensor, candidate_ids: list, lambda_mult: float, top_k: int, sample_top_m: int = 5):
+        """
+        Performs a non-deterministic MMR re-ranking by sampling from the top candidates at each step.
+        """
+        if not candidate_ids:
+            return []
+
+        device = self.embedder.device
+        query_emb = query_embedding.to(device)
+        candidate_embs = candidate_embeddings.to(device)
+
+        relevance_scores = F.cosine_similarity(query_emb, candidate_embs)
+        diversity_scores = F.cosine_similarity(candidate_embs.unsqueeze(1), candidate_embs.unsqueeze(0), dim=2)
+
+        num_candidates = len(candidate_ids)
+        
+        # Ddictionaries for efficient lookups and removals
+        remaining_candidates = {i: cid for i, cid in enumerate(candidate_ids)}
+        selected_indices = []
+        
+        first_selection_idx = torch.argmax(relevance_scores).item()
+        selected_indices.append(first_selection_idx)
+        del remaining_candidates[first_selection_idx]
+
+        while len(selected_indices) < min(top_k, num_candidates):
+            if not remaining_candidates: break
+
+            scores = []
+            indices = []
+            for idx in remaining_candidates.keys(): # Compute relevance and redundancy for all remaining candidates
+                relevance = relevance_scores[idx]
+                redundancy = torch.max(diversity_scores[idx, selected_indices])
+                mmr_score = lambda_mult * relevance - (1 - lambda_mult) * redundancy
+                scores.append(mmr_score)
+                indices.append(idx)
+            
+            # Get top m results
+            scores_tensor = torch.tensor(scores, device=device)
+            top_m = min(sample_top_m, len(scores_tensor))
+            top_scores, top_indices_of_scores = torch.topk(scores_tensor, k=top_m)
+            # Extract one probabilistically
+            probabilities = F.softmax(top_scores, dim=0)
+            sampled_idx_within_top_m = torch.multinomial(probabilities, num_samples=1).item()
+            # Add selected card to results and remove it from candidates
+            chosen_original_index = indices[top_indices_of_scores[sampled_idx_within_top_m]]
+            selected_indices.append(chosen_original_index)
+            del remaining_candidates[chosen_original_index]
+
+        return [candidate_ids[i] for i in selected_indices]
+
     def recommend_cards( self,
         deck_id: int,
         db_name: str,
@@ -400,8 +451,8 @@ class CardRetriever:
             candidate_pool = set()
             
             # Define the spectrum of synergy-to-prompt influence to explore
-            alpha_values = [0.0, 0.25, 0.5, 1.0, 2.0]
-            k_per_query = n * 5 # Retrieve more cards, filter them later based on mmr
+            alpha_values = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0]
+            k_per_query = n * 8 # Retrieve more cards, filter them later based on mmr
 
             for alpha in alpha_values:
                 current_query_vector = deck_emb + alpha * prompt_direction_vec
@@ -446,25 +497,46 @@ class CardRetriever:
             device=self.embedder.device
             )
 
-        final_ids = self._mmr_re_rank(
+        # final_ids = self._mmr_re_rank(
+        #     query_embedding=relevance_query_vector,
+        #     candidate_embeddings=candidate_embeddings,
+        #     candidate_ids=candidate_ids,
+        #     lambda_mult=mmr_lambda,
+        #     top_k=min(n, len(candidate_ids))
+        #     )
+
+        final_ids = self._stochastic_mmr_re_rank(
             query_embedding=relevance_query_vector,
             candidate_embeddings=candidate_embeddings,
             candidate_ids=candidate_ids,
             lambda_mult=mmr_lambda,
-            top_k=min(n, len(candidate_ids))
+            top_k=min(n, len(candidate_ids)),
+            sample_top_m=5
             )
-        
+
         return [self.id_to_name.get(oid, "Unknown Card") for oid in final_ids]
 
 
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
+    data_dir = os.path.join(this, "data")
+    cards_metadata = os.path.join(data_dir, "clean_data.json")
     db_path = os.path.join(this, "card_db")
-    cards_metadata = os.path.join(this, "data", "clean_data.json")
-    db_name = "mtg_cards_v1_all_20_3"
     client = chromadb.PersistentClient(path=db_path)    
 
-    emb_dict_paths = [os.path.join(this, "data", f"emb_dict_v1_{dataset}_{epochs}_{loss}.pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
-    db_names = [f"mtg_cards_v1_{dataset}_{epochs}_{loss}" for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    # emb_dict_paths = [os.path.join(this, "data", f"emb_dict_v1_{dataset}_{epochs}_{loss}.pt") for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    # db_names = [f"mtg_cards_v1_{dataset}_{epochs}_{loss}" for dataset in ["all","div"] for epochs in ["20","200"] for loss in ["nce","3"]]
+    
+    emb_dict_paths = [
+        os.path.join(data_dir, "emb_dict_v1_div_20_triplet_s2.pt"),
+        os.path.join(data_dir, "emb_dict_v1_all_200_triplet_s2.pt"),
+        os.path.join(data_dir, "emb_dict_v1_all_200_nce_s2.pt")
+    ]
+    db_names = [
+        "mtg_cards_v1_div_20_triplet_s2",
+        "mtg_cards_v1_all_200_triplet_s2",
+        "mtg_cards_v1_all_200_nce_s2",
+    ]
+
     for card_emb_path, db_name in zip(emb_dict_paths, db_names):
         build_and_save_chroma_db(card_emb_path, cards_metadata, client, db_name)
