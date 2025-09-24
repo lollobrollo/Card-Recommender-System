@@ -13,7 +13,6 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import models
-from utils import preprocess_text
 from train import load_card_encoder
 import ijson
 import os
@@ -190,8 +189,8 @@ class CardEmbedder:
             # full_repr = [stats, rarity, color, cmc, semantic, roles, types, keywords]
 
             # Get fields related to prompt (semantic, roles)
-            prompt_semantic_emb = torch.tensor(self.llm.encode(preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
-            inputs = self.role_tokenizer(preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
+            prompt_semantic_emb = torch.tensor(self.llm.encode(utils.preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
+            inputs = self.role_tokenizer(utils.preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
             outputs = self.role_classifier(**inputs)
             prompt_role_logits = outputs.logits.squeeze(0)
 
@@ -219,8 +218,8 @@ class CardEmbedder:
         """
         with torch.no_grad():
             # Get semantic and role vectors from the prompt
-            prompt_semantic_emb = torch.tensor(self.llm.encode(preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
-            inputs = self.role_tokenizer(preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
+            prompt_semantic_emb = torch.tensor(self.llm.encode(utils.preprocess_text(prompt, remove_reminder=False, mask_name=False)), device=self.device)
+            inputs = self.role_tokenizer(utils.preprocess_text(prompt, remove_reminder=False, mask_name=False), return_tensors="pt", truncation=True, padding=True).to(self.device)
             prompt_role_logits = self.role_classifier(**inputs).logits.squeeze(0)
 
             # Create a neutral scaffold for the other features
