@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import torch
 import os
 import matplotlib.pyplot as plt
@@ -207,7 +213,8 @@ def demo_statistics_v1(this):
 
 def demo_statistics_v2(this):
 
-    feedback_path = os.path.join(this, "misc", "user_feedback.jsonl")
+    # feedback_path = os.path.join(this, "misc", "user_feedback.jsonl")
+    feedback_path = os.path.join(this, "misc", "user_feedback_s2.jsonl")
     if not os.path.exists(feedback_path):
         print(f"Error: Feedback file not found at '{feedback_path}'")
         return
@@ -286,17 +293,102 @@ def demo_statistics_v2(this):
     plt.show()
 
 
-def demo_statistics_v3(this):
+def plot_final_model_comparison(this):
     """
-    ccreates three plots for the models that passed stage 1
+    Creates a single 1x3 plot for comparing the three most promising models from the Stage 2 feedback round
     """
     feedback_path = os.path.join(this, "misc", "user_feedback_s2.jsonl")
+    print(f"--- Creating Final Comparison Plot from: {os.path.basename(feedback_path)} ---")
+
     if not os.path.exists(feedback_path):
         print(f"Error: Feedback file not found at '{feedback_path}'")
         return
 
+    all_ratings_data = []
+    with open(feedback_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                all_ratings_data.append(record)
+            except json.JSONDecodeError:
+                continue
+    
+    if not all_ratings_data:
+        print("No valid feedback records found.")
+        return
 
-if __name__ == '__main__':
+    df = pd.json_normalize(all_ratings_data, record_path='ratings', meta=['model_version'])
+
+    # Remove slivers for further analysis
+    initial_count = len(df)
+    df = df[~df['card_name'].str.contains("sliver", case=False)]
+    final_count = len(df)
+    print(f"Filtered out {initial_count - final_count} ratings related to Sliver cards.")        
+
+    final_model_names = [
+        "Complete Dataset (200 Epochs, InfoNCE)",
+        "Complete Dataset (200 Epochs, Triplet)",
+        "Diversified Dataset (20 Epochs, Triplet)"
+    ]
+    df['model_version'] = pd.Categorical(df['model_version'], categories=final_model_names, ordered=True)
+    df = df[df['model_version'].notna()].sort_values('model_version')
+
+    fig, axes = plt.subplots(1, 3, figsize=(20, 6), sharey=True)
+    sns.set_theme(style="whitegrid", palette="viridis")
+    
+    fig.suptitle("Final Model Performance Comparison based on User Ratings", fontsize=18, fontweight="bold")
+
+    for i, model_name in enumerate(final_model_names):
+        ax = axes[i]
+        model_df = df[df['model_version'] == model_name]
+
+        if model_df.empty:
+            ax.set_title(f"{model_name}\n(No Data)", fontsize=12)
+            continue
+
+        sns.countplot(
+            x='rating',
+            data=model_df,
+            ax=ax,
+            order=[1, 2, 3, 4, 5]
+        )
+
+        avg_rating = model_df['rating'].mean()
+        total_ratings = len(model_df)
+
+        ax.set_title(f"{model_name}", fontsize=14, pad=10)
+        
+        stats_string = f"Avg: {avg_rating:.2f}/5\nN = {total_ratings}"
+        ax.text(0.95, 0.95, stats_string,
+                transform=ax.transAxes,
+                fontsize=12,
+                verticalalignment='top',
+                horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.8))
+
+        # Add labels on top of each bar 
+        for p in ax.patches:
+            height = p.get_height()
+            if height > 0:
+                ax.annotate(f'{int(height)}', 
+                            (p.get_x() + p.get_width() / 2., height), 
+                            ha='center', va='center', 
+                            xytext=(0, 5), 
+                            textcoords='offset points',
+                            fontsize=11)
+        
+        ax.set_xlabel("User Rating", fontsize=12)
+        # Only set the y-axis label for the first plot
+        if i == 0:
+            ax.set_ylabel("Number of Ratings", fontsize=12)
+        else:
+            ax.set_ylabel("")
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.93]) # Adjust layout for suptitle
+    plt.show()
+
+if __name__ == "__main__":
     this = os.path.dirname(__file__)
     # search_results(this)
     # demo_statistics_v2(this)
+    plot_final_model_comparison(this)

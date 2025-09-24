@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import os
 import json
 import ijson
@@ -336,12 +342,12 @@ def main():
 if __name__ == "__main__":
     this = os.path.dirname(__file__)
     Paths.clean_data_json = os.path.join(this, "data", "clean_data.json")
-    Paths.rules_txt =  os.path.join(this, "data", "mtg_rules.txt")
-    Paths.fundation_model =  os.path.join(this, "models", "magic-distilbert-base-v1")
-    Paths.pseudo_labeled_dataset =  os.path.join(this, "data", "card_roles_dataset.jsonl")
-    Paths.final_classifier =  os.path.join(this, "models", "card-role-classifier-final")
+    Paths.rules_txt = os.path.join(this, "data", "mtg_rules.txt")
+    Paths.fundation_model = os.path.join(this, "models", "magic-distilbert-base-v1")
+    Paths.pseudo_labeled_dataset = os.path.join(this, "data", "card_roles_dataset.jsonl")
+    Paths.final_classifier = os.path.join(this, "models", "card-role-classifier-final")
     Paths.scraped_articles_txt = os.path.join(this, "data", "scraped_articles.txt")
 
-    # main()
+    main()
 
     #check_corpus()

@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import requests
 import shutil
 import ijson
@@ -494,7 +500,7 @@ if __name__ == "__main__":
     # clean_data = os.path.join(base_dir, "data", "clean_data.json")
 
     # download_data(raw_data)
-    #filter_data(raw_data, clean_data)
+    # filter_data(raw_data, clean_data)
     # download_images(clean_data)
 
     # # Found 33504 unique card images to download/process.

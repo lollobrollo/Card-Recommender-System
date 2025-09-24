@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import time
 from tqdm import tqdm
 import os

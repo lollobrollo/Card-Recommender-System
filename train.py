@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import models
 import torch
 import torch.optim as optim
@@ -310,24 +316,24 @@ def main_cpr_training(
     cpr_checkpoint_path,
     loss_fn,
     step_fn,
-    NUM_EPOCHS = 20,
-    LEARNING_RATE = 0.00002,
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-    BATCH_SIZE = 128,
-    NUM_TYPES = 420,
-    NUM_KEYW = 627):
+    num_epochs = 20,
+    learning_rate = 0.00002,
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    batch_size = 128,
+    num_types = 420,
+    num_keyw = 627):
     ### TRAINING CPR PIPELINE WITH GENERALIZED CLASS
 
-    feature_encoder = models.FeatureEncoder(num_types=NUM_TYPES, type_emb_dim=64, num_keyw=NUM_KEYW, keyw_emb_dim=64)
-    cpr_model = models.PipelineCPR(feature_encoder, out_dim=512).to(DEVICE)
-    cpr_optimizer = optim.AdamW(cpr_model.parameters(), lr=LEARNING_RATE)
+    feature_encoder = models.FeatureEncoder(num_types=num_types, type_emb_dim=64, num_keyw=num_keyw, keyw_emb_dim=64)
+    cpr_model = models.PipelineCPR(feature_encoder, out_dim=512).to(device)
+    cpr_optimizer = optim.AdamW(cpr_model.parameters(), lr=learning_rate)
 
     cpr_full_dataset = torch.load(cpr_dataset_path, weights_only = False)
     train_ds_cpr, val_ds_cpr = torch.utils.data.random_split(cpr_full_dataset, [0.8, 0.2])
-    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=BATCH_SIZE, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=True)
-    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=BATCH_SIZE, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=False)
+    train_loader_cpr = DataLoader(train_ds_cpr, batch_size=batch_size, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=True)
+    val_loader_cpr = DataLoader(val_ds_cpr, batch_size=batch_size, drop_last=False, collate_fn=models.triplet_collate_fn, shuffle=False)
 
-    num_training_steps = NUM_EPOCHS * len(train_loader_cpr)
+    num_training_steps = num_epochs * len(train_loader_cpr)
     num_warmup_steps = int(0.05 * num_training_steps)
     cpr_scheduler = get_linear_schedule_with_warmup(
         optimizer=cpr_optimizer,
@@ -342,11 +348,11 @@ def main_cpr_training(
         train_loader=train_loader_cpr,
         val_loader=val_loader_cpr,
         checkpoint_path=cpr_checkpoint_path,
-        device=DEVICE,
+        device=device,
         scheduler=cpr_scheduler
     )
 
-    trainer_cpr.train(NUM_EPOCHS, step_fn=step_fn)
+    trainer_cpr.train(num_epochs, step_fn=step_fn)
 
 
 # - - - - - - - - - - - - - - - - - Auxiliary functions, post training - - - - - - - - - - - - - - - - - 

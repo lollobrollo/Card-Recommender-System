@@ -3,3 +3,7 @@ __init__.py
 models
 old
 check_llm_understanding.py
+misc
+card_db
+.gradio
+__pycache__

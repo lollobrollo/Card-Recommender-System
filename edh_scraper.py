@@ -1,3 +1,9 @@
+"""
+    Author : Lorenzo Bortolussi
+    Year : 2024/2025
+    This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
+"""
+
 import torch
 import argparse
 import json
@@ -341,7 +347,8 @@ def diversify(decks: List[Deck], per_bucket: int, n_duplicates: int):
     return final_decks
     
 
-def main(   card_dict: str = None,
+def main(   this:str = None,
+            card_dict: str = None,
             out_jsonl: str = None,
             out_jsonl_diversified: str = None,
             max_archidekt: int = 800,
@@ -350,8 +357,8 @@ def main(   card_dict: str = None,
             n_duplicates_per_strategy: int = 3,
             anchor_sizes: Optional[List[int]] = None,
             rate_per_sec: float = 2.0):
-
-    this = os.path.dirname(__file__) or "."
+    if not this:
+        this = os.path.dirname(__file__) or "."
     if card_dict is None:
         card_dict = os.path.join(this, "data", "card_dict.pt")
     if out_jsonl is None:
