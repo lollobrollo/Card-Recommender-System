@@ -35,24 +35,42 @@ feedback_file = os.path.join(this_dir, "misc", "user_feedback_s2.jsonl") # file 
 
 # Models that performed best in the first testing
 model_versions = {
-    "Diversified Dataset (20 Epochs, Triplet)": {
+    "Diversified Dataset (20 Epochs, Triplet) s2": {
         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_div_20_triplet_s2.pt"),
         "db_name": "mtg_cards_v1_div_20_triplet_s2"
     },
-    "Complete Dataset (200 Epochs, Triplet)": {
+    "Complete Dataset (200 Epochs, Triplet) s2": {
         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_triplet_s2.pt"),
         "db_name": "mtg_cards_v1_all_200_triplet_s2"
     },
-    "Complete Dataset (200 Epochs, InfoNCE)": {
+    "Complete Dataset (200 Epochs, InfoNCE) s2": {
         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce_s2.pt"),
         "db_name": "mtg_cards_v1_all_200_nce_s2"
     }
 }
 
+# Add other three for personal use
+model_versions.update({
+    "Diversified Dataset (20 Epochs, Triplet)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_div_20_3.pt"),
+        "db_name": "mtg_cards_v1_div_20_3"
+    },
+    "Complete Dataset (200 Epochs, Triplet)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_3.pt"),
+        "db_name": "mtg_cards_v1_all_200_3"
+    },
+    "Complete Dataset (200 Epochs, InfoNCE)": {
+        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce.pt"),
+        "db_name": "mtg_cards_v1_all_200_nce"
+    }
+})
+
+
 
 print("Loading shared resources...")
 repr_dict_path = os.path.join(data_dir, "card_repr_dict_v1.pt")
 type_keyw_dict_path = os.path.join(data_dir, "type_and_keyw_dict.pt")
+type_keyw_dict_s2_path = os.path.join(data_dir, "type_and_keyw_dict_s2.pt")
 card_dict_path = os.path.join(data_dir, "card_dict.pt")
 mtg_llm_path = os.path.join(models_dir, "magic-distilbert-base-v1")
 role_class_path = os.path.join(models_dir, "card-role-classifier-final")
@@ -60,7 +78,7 @@ client = chromadb.PersistentClient(path=db_path)
 name_to_id_map = torch.load(card_dict_path, weights_only=False)
 id_to_name_map = {v: k for k, v in name_to_id_map.items()} # used for logging
 
-num_types = 420 # 420 in new versions (s2), old models might still use 422
+num_types = 420 # 420 in new versions (s2), old models still use 422
 num_keyw = 627
 
 retriever_cache = {}
@@ -73,16 +91,30 @@ def get_retriever(model_version_name: str):
     print(f"Loading retriever for '{model_version_name}' for the first time...")
     config = model_versions[model_version_name]
     
-    embedder = vector_database.CardEmbedder(
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        cpr_checkpoint_path=config["checkpoint"],
-        partial_map_path=repr_dict_path,
-        cat_map_path=type_keyw_dict_path,
-        llm_path=mtg_llm_path,
-        role_class_path=role_class_path,
-        num_types=num_types,
-        num_keywords=num_keyw
-    )
+    # Kinda patchwork, change num_types and type_and_keyw_dict based on model name
+    if "s2" in model_version_name:
+        num_types = 420
+        embedder = vector_database.CardEmbedder(
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            cpr_checkpoint_path=config["checkpoint"],
+            partial_map_path=repr_dict_path,
+            cat_map_path=type_keyw_dict_s2_path,
+            llm_path=mtg_llm_path,
+            role_class_path=role_class_path,
+            num_types=420,
+            num_keywords=num_keyw
+        )
+    else:
+        embedder = vector_database.CardEmbedder(
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            cpr_checkpoint_path=config["checkpoint"],
+            partial_map_path=repr_dict_path,
+            cat_map_path=type_keyw_dict_path,
+            llm_path=mtg_llm_path,
+            role_class_path=role_class_path,
+            num_types=422,
+            num_keywords=num_keyw
+        )
 
     retriever = vector_database.CardRetriever(
         embedder=embedder,
@@ -135,19 +167,18 @@ def get_recommendations_and_show_feedback_ui(deck_url: str, prompt: str, model_c
         slider_updates = [gr.update(visible=False) for _ in range(10)]
         return [[]] + [None] + [gr.update(visible=False)] + slider_updates
 
-    for i in range(10):
-        if i < len(recommended_names):
-            name = recommended_names[i]
-            oracle_id = name_to_id_map.get(name.lower())
-            if oracle_id:
-                img_path = os.path.join(img_folder_path, f"{oracle_id}.jpg")
-                if os.path.exists(img_path):
-                    gallery_output.append((img_path, name))
-                    card_ids_for_state.append(oracle_id)
-                    slider_updates.append(gr.update(label=name, visible=True))
-        else:
-            # If there are fewer than 10 results, hide the remaining sliders
-            slider_updates.append(gr.update(visible=False))
+    for name in recommended_names:
+        oracle_id = name_to_id_map.get(name.lower())
+        if oracle_id:
+            img_path = os.path.join(img_folder_path, f"{oracle_id}.jpg")
+            if os.path.exists(img_path):
+                gallery_output.append((img_path, name))
+                card_ids_for_state.append(oracle_id)
+                # Update the slider to be visible and have the card name as its label
+                slider_updates.append(gr.update(label=name, visible=True))
+
+    while len(slider_updates) < 10:
+        slider_updates.append(gr.update(visible=False))
             
     state_info = {
         "deck_id": deck_id, "prompt": prompt, "model_choice": model_choice,
