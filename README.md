@@ -86,7 +86,7 @@ The final system uses a **vector offset method** for prompt-guided search and a 
 
 ## License
 
-This project is licensed under the [**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0)**](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+This project is licensed under the [MIT licence](https://mit-license.org/).
 
 ## Acknowledgments
 
