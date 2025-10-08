@@ -58,21 +58,22 @@ The project is structured as a sequential pipeline. The scripts should be run in
 
 The repository is organized as follows:
 ```
-├── data/                               # Stores raw and processed data files (card data, decks, etc.)
-├── models/                             # Stores trained model checkpoints
-├── misc/                               # Miscellaneous files like feedback logs and plots
-├── article_scraper.py                  # Script to scrape the text corpus for Stage 2
-├── text_embeddings.py                  # 3-stage training pipeline for language models
-├── preprocess_cards.py                 # Script for downloading and processing card data
-├── edh_scraper.py                      # Script for scraping decklists and creating training datasets
-├── train.py                            # Main training script for the CPR models
-├── vector_database.py                  # Core logic for the retriever and database interaction
-├── app.py                              # The Gradio web application for the interactive demo
-├── search_results.py                   # Script for local testing and feedback visualization
-├── models.py                           # Defines the PyTorch model architectures
-├── utils.py                            # Utility functions used across the project
-├── CPR_for_card_recommendations.pdf    # The PDF file containing the thesis
-└── complete_pipeline.ipynb             # Jupyter Notebook demonstrating the entire workflow
+├── data/                                   # Stores raw and processed data files (card data, decks, etc.)
+├── models/                                 # Stores trained model checkpoints
+├── misc/                                   # Miscellaneous files like feedback logs and plots
+├── article_scraper.py                      # Script to scrape the text corpus for Stage 2
+├── text_embeddings.py                      # 3-stage training pipeline for language models
+├── preprocess_cards.py                     # Script for downloading and processing card data
+├── edh_scraper.py                          # Script for scraping decklists and creating training datasets
+├── train.py                                # Main training script for the CPR models
+├── vector_database.py                      # Core logic for the retriever and database interaction
+├── app.py                                  # The Gradio web application for the interactive demo
+├── search_results.py                       # Script for local testing and feedback visualization
+├── models.py                               # Defines the PyTorch model architectures
+├── utils.py                                # Utility functions used across the project
+├── CPR_for_card_recommendations.pdf        # The PDF file containing the thesis
+├── ThesisPresentationBortolussiL_v2.pdf    # Presentation overviewing the project
+└── complete_pipeline.ipynb                 # Jupyter Notebook demonstrating the entire workflow
 
 ```
 
