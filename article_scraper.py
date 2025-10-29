@@ -4,13 +4,14 @@
     This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
 """
 
-import time
-from tqdm import tqdm
-import os
-import re
-import utils
-import requests
-from bs4 import BeautifulSoup
+import time                     # delay between http requests
+from tqdm import tqdm           # completition bars
+import os                       # managing paths
+import re                       # regular expressions for filtering
+import utils                    # access to preprocess_text
+import requests                 # http requests
+from bs4 import BeautifulSoup   # parsing of reuests responses
+
 
 class SimpleRateLimiter:
     def __init__(self, per_sec: float = 2.0):
@@ -29,7 +30,7 @@ class SimpleRateLimiter:
 
 
 class ArticlesScraper:
-    def __init__(self, stop_phrases, lang_check, requests_per_second=2.0):
+    def __init__(self, stop_phrases, lang_check, requests_per_second=2.0, max_workers=5):
         self.stop_phrases = stop_phrases
         self.lang_check = lang_check
         self.rate_limiter = SimpleRateLimiter(per_sec=requests_per_second)
@@ -155,6 +156,7 @@ class ArticlesScraper:
             print("No article links to process. Exiting.")
             return
 
+        
         with open(output_path, 'w', encoding='utf-8') as f:
             for link in tqdm(all_article_links, desc="Scraping Remaining Articles"):
                 paragraphs = self._scrape_article_text(link)
