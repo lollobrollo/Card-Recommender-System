@@ -4,16 +4,11 @@
     This code is part of the implementation of the project developed for my Thesis in Artificial Intelligence and Data Analytics.
 """
 
-import torch
-import torch.nn as nn
-from torchvision import transforms
-import os
-import torch
-from PIL import Image
-from tqdm import tqdm
-import ijson
-import re
-import json
+from torch import save  # saves datasets and dictionaries to file
+import os               # manages file paths
+from tqdm import tqdm   # progress bars
+import ijson            # iterate over long json files
+import re               # string matching and filtering
 
 
 def generate_and_save_card_dict(this):
@@ -62,7 +57,7 @@ def generate_and_save_card_dict(this):
         return
     print(f"\nGenerated dictionary with {len(card_dict)} cards.")
     try:
-        torch.save(card_dict, output_path)
+        save(card_dict, output_path)
         print(f"Successfully saved dictionary to: {output_path}")
     except Exception as e:
         print(f"\nError saving dictionary to {output_path}: {e}")
@@ -119,7 +114,7 @@ def save_dataset_to_pt(img_dir, output_file):
         output_file (str): Path to output .pt file
     """
     dataset = CardImageDataset(img_dir)
-    torch.save(dataset, output_file)
+    save(dataset, output_file)
 
 
 def get_all_card_types_and_keywords(json_path):
