@@ -106,17 +106,6 @@ def synchronize_images_and_data(json_path, image_dir):
     print(f"\nSync complete. Deleted {deleted_count} stale images.")
 
 
-def save_dataset_to_pt(img_dir, output_file):
-    """
-    Helper function that saves to file the dataset used to train the convolutional autoencoder.
-    Args:
-        img_dir (str): Path to folder containing images
-        output_file (str): Path to output .pt file
-    """
-    dataset = CardImageDataset(img_dir)
-    save(dataset, output_file)
-
-
 def get_all_card_types_and_keywords(json_path):
     """
     Scans the dataset and extracts all unique types, supertypes, and subtypes from the 'type_line' of each card.
