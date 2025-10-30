@@ -11,56 +11,55 @@ import ijson            # iterate over long json files
 import re               # string matching and filtering
 
 
-def generate_and_save_card_dict(this):
-    """
-    Using data/clean_data.json, builds a case-insensitive map from card name to oracle_id
-    Filters out cards without an associated image in data/images
-    Saves the dictionary into data/card_dict.pt
-    """
-    data_dir = os.path.join(this, "data")
-    json_path = os.path.join(data_dir, "clean_data.json")
-    image_dir = os.path.join(data_dir, "images")
-    output_path = os.path.join(data_dir, "card_dict.pt")
+# def generate_and_save_card_dict(clean_cards_path, image_dir, output_path):
+#     """
+#     Using data/clean_data.json, builds a case-insensitive map from card name to oracle_id
+#     Saves the dictionary into path specified by user
+#     """
+#     data_dir = os.path.join(this, "data")
+#     json_path = os.path.join(data_dir, "clean_data.json")
+#     image_dir = os.path.join(data_dir, "images")
+#     output_path = os.path.join(data_dir, "card_dict.pt")
     
-    # Get a set of all available image IDs
-    if not os.path.isdir(image_dir):
-        print(f"Error: Image directory not found at {image_dir}")
-        return
+#     # Get a set of all available image IDs
+#     if not os.path.isdir(image_dir):
+#         print(f"Error: Image directory not found at {image_dir}")
+#         return
 
-    # Create a set of oracle_ids from the image filenames
-    try:
-        available_image_ids = {os.path.splitext(f)[0] for f in os.listdir(image_dir)}
-        print(f"Found {len(available_image_ids)} images in the '{os.path.basename(image_dir)}' directory.")
-    except Exception as e:
-        print(f"Error reading image directory {image_dir}: {e}")
-        return
+#     # Create a set of oracle_ids from the image filenames
+#     # try:
+#     #     available_image_ids = {os.path.splitext(f)[0] for f in os.listdir(image_dir)}
+#     #     print(f"Found {len(available_image_ids)} images in the '{os.path.basename(image_dir)}' directory.")
+#     # except Exception as e:
+#     #     print(f"Error reading image directory {image_dir}: {e}")
+#     #     return
 
-    # Iterate through the JSON and build the dictionary
-    card_dict = {}
-    print(f"Reading {os.path.basename(json_path)} to build dictionary...")
-    try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            for card in tqdm(ijson.items(f, 'item'), desc="Processing cards"):
-                oracle_id = card.get('oracle_id')
-                # Only add the card if its oracle_id has a corresponding image
-                if oracle_id and oracle_id in available_image_ids:
-                    name = card.get('name',"").lower()
-                    if name:
-                        card_dict[name] = oracle_id
-    except FileNotFoundError:
-        print(f"Error: Clean data file not found at {json_path}")
-        return
+#     # Iterate through the JSON and build the dictionary
+#     card_dict = {}
+#     print(f"Reading {os.path.basename(json_path)} to build dictionary...")
+#     try:
+#         with open(json_path, 'r', encoding='utf-8') as f:
+#             for card in tqdm(ijson.items(f, 'item'), desc="Processing cards"):
+#                 oracle_id = card.get('oracle_id')
+#                 # Only add the card if its oracle_id has a corresponding image
+#                 if oracle_id and oracle_id in available_image_ids:
+#                     name = card.get('name',"").lower()
+#                     if name:
+#                         card_dict[name] = oracle_id
+#     except FileNotFoundError:
+#         print(f"Error: Clean data file not found at {json_path}")
+#         return
 
-    # Save the final dictionary
-    if not card_dict:
-        print("\nWarning: The final dictionary is empty. No matching images were found for cards in the JSON.")
-        return
-    print(f"\nGenerated dictionary with {len(card_dict)} cards.")
-    try:
-        save(card_dict, output_path)
-        print(f"Successfully saved dictionary to: {output_path}")
-    except Exception as e:
-        print(f"\nError saving dictionary to {output_path}: {e}")
+#     # Save the final dictionary
+#     if not card_dict:
+#         print("\nWarning: The final dictionary is empty. No matching images were found for cards in the JSON.")
+#         return
+#     print(f"\nGenerated dictionary with {len(card_dict)} cards.")
+#     try:
+#         save(card_dict, output_path)
+#         print(f"Successfully saved dictionary to: {output_path}")
+#     except Exception as e:
+#         print(f"\nError saving dictionary to {output_path}: {e}")
 
 
 def synchronize_images_and_data(json_path, image_dir):
