@@ -50,20 +50,20 @@ model_versions = {
 }
 
 # Add other three for personal use
-model_versions.update({
-    "Diversified Dataset (20 Epochs, Triplet)": {
-        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_div_20_3.pt"),
-        "db_name": "mtg_cards_v1_div_20_3"
-    },
-    "Complete Dataset (200 Epochs, Triplet)": {
-        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_3.pt"),
-        "db_name": "mtg_cards_v1_all_200_3"
-    },
-    "Complete Dataset (200 Epochs, InfoNCE)": {
-        "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce.pt"),
-        "db_name": "mtg_cards_v1_all_200_nce"
-    }
-})
+# model_versions.update({
+#     "Diversified Dataset (20 Epochs, Triplet)": {
+#         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_div_20_3.pt"),
+#         "db_name": "mtg_cards_v1_div_20_3"
+#     },
+#     "Complete Dataset (200 Epochs, Triplet)": {
+#         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_3.pt"),
+#         "db_name": "mtg_cards_v1_all_200_3"
+#     },
+#     "Complete Dataset (200 Epochs, InfoNCE)": {
+#         "checkpoint": os.path.join(models_dir, "cpr_checkpoint_v1_all_200_nce.pt"),
+#         "db_name": "mtg_cards_v1_all_200_nce"
+#     }
+# })
 
 
 

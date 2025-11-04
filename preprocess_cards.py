@@ -559,4 +559,3 @@ if __name__ == "__main__":
 
     # build_card_representations(base_dir, batch_size=16, use_img=False)
     # build_card_representations(bae_dir, batch_size=16, use_img=True)
-    
